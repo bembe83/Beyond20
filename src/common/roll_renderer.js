@@ -809,6 +809,8 @@ class Beyond20RollRenderer {
                 is_critical = request.rollCritical;
             }
             
+            // GoDice owns the damage critical choice and has already included it.
+            if (this._settings["use-godice"] && request.godiceDamageHandled) is_critical = false;
             const conditional_indices = new Set();
             for (let i = 0; i < damage_rolls.length; i++) {
                 if (damage_rolls[i][2] & DAMAGE_FLAGS.CONDITIONAL) {
@@ -1139,7 +1141,7 @@ class Beyond20RollRenderer {
             const mod = request.modifier || request.roll;
             const rname = request.name || request.type;
 
-            return this.rollDice(request, rname + " (" + mod + ")", mod, {});
+            return this.rollDice(request, request.godiceNoteTitle || rname + " (" + mod + ")", mod, {});
         }
     }
 }

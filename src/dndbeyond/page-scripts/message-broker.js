@@ -485,6 +485,27 @@ if (!window.__beyond20_mb2_initialized__) {
 
     function fulfilledRoll(rollData) {
         if (!rollData) return;
+        if (rollData.request?.godice) {
+            if (!Array.isArray(rollData.rolls) || !rollData.rolls.length) return;
+            messageBroker.register();
+            if (!messageBroker._mb) throw new Error('D&D Beyond game log is not ready.');
+            const context = messageBroker.getContext(rollData.request.character);
+            if (rollData.request.whisper === 1) {
+                context.messageScope = 'userId';
+                context.messageTarget = messageBroker._mb.userId;
+            }
+            messageBroker.postMessage({
+                eventType: 'dice/roll/fulfilled', source: 'web', persist: true,
+                messageScope: context.messageScope, messageTarget: context.messageTarget,
+                data: {
+                    action: normalizeActionName(rollData.name), context,
+                    ...(window.mydice?.data?.setId ? {setId: window.mydice.data.setId} : {}),
+                    rollId: uuidv4(), rolls: b20BuildDdbRollsForGameLog(rollData.rolls, rollData.request),
+                    [B20_OVERRIDE_MARKER]: true
+                }
+            }, {physical: true});
+            return;
+        }
         if (!b20OverrideQueue.length) return;
 
         const entry = b20OverrideQueue[0];
@@ -498,6 +519,8 @@ if (!window.__beyond20_mb2_initialized__) {
             _dispatchOverrideFulfilled(entry, 0);
         }
     }
+
+    window.__beyond20PublishGoDice = fulfilledRoll;
 
     function disconnectAllEvents() {
         const registeredEvents = window[EVENTS_KEY] || [];
@@ -515,6 +538,7 @@ if (!window.__beyond20_mb2_initialized__) {
 
         b20OverrideQueue.length = 0;
         window[EVENTS_KEY] = [];
+        delete window.__beyond20PublishGoDice;
         window.__beyond20_mb2_initialized__ = false;
 
         messageBroker.unregister();

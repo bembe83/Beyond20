@@ -437,3 +437,11 @@ span.dice-roll.beyond20-tooltip-content {
 .ct-character-header-info .ddbc-character-tidbits {
     min-width:auto;
 }
+
+/* Physical GoDice values are authoritative. Hide DDB's decorative dice canvas
+   while this tab uses GoDice, including when AboveVTT is not running. */
+html[data-beyond20-godice-enabled="true"] canvas.dice-rolling-panel__container,
+html[data-beyond20-godice-enabled="true"] #character-tools-target > canvas {
+    visibility: hidden !important;
+    pointer-events: none !important;
+}

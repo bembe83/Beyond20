@@ -25,6 +25,9 @@ class CharacterBase {
     setGlobalSettings(new_settings) {
         this._global_settings = new_settings;
         dndbeyondDiceRoller.setSettings(new_settings);
+        document.documentElement.dataset.beyond20GodiceEnabled = String(!!new_settings["use-godice"]);
+        if (new_settings["use-godice"] || GoDice.loading)
+            GoDice.request('configure', {enabled: !!new_settings["use-godice"]}).catch(error => console.warn('GoDice:', error));
         updateRollTypeButtonClasses(this);
     }
 

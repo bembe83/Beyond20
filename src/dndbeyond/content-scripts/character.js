@@ -1200,8 +1200,12 @@ async function rollItem(force_display = false, force_to_hit_only = false, force_
         for (let i = 0; i < prop_list.length; i++) {
             const prop = propertyListToDict(prop_list.eq(i));
             if (Object.keys(prop)[0] == "Damage") {
-                const value = prop_list.eq(i).find("> p").filter((idx, el) => el.textContent === prop["Damage"]);
-                let damage = value.find(".ct-damage__value,.ddbc-damage__value").text();
+                let value = prop_list.eq(i).find("> p").filter((idx, el) => el.textContent === prop["Damage"]);
+                if (!value.length && settings['use-godice']) {
+                    value = prop_list.eq(i).find(".ct-property-list__property-content,.ddbc-property-list__property-content,[class*='InfoItem_value']").first();
+                    if (!value.length) value = prop_list.eq(i).children().filter((idx, el) => /value/i.test(el.className)).first();
+                }
+                let damage = settings['use-godice'] ? getGoDiceWeaponDamage(item_full_name, value) : value.find(".ct-damage__value,.ddbc-damage__value").text();
                 let damage_type = properties["Damage Type"] || "";
                 let versatile_damage = value.find(".ct-item-detail__versatile-damage,.ddbc-item-detail__versatile-damage").text().slice(1, -1);
 
@@ -1261,6 +1265,7 @@ async function rollItem(force_display = false, force_to_hit_only = false, force_
                     const dmg_info = additional_damages.eq(j).find(".ct-item-detail__additional-damage-info,.ddbc-item-detail__additional-damage-info").text();
                     if (dmg != "") {
                         dmg = dmg.replace(dmg_info, "");
+                        if (settings["use-godice"]) dmg = normalizeDDBDamageFormula(dmg);
                         if (dmg_info != "")
                             dmg_type += " (" + dmg_info + ")";
 
@@ -3562,13 +3567,75 @@ function resetHijackQuickRollState() {
 
 let ddbHijackPointerHandled = false;
 
+function getGoDiceNoteRollArgs(control, formula) {
+    const types = /^(acid|bludgeoning|cold|fire|force|lightning|necrotic|piercing|poison|psychic|radiant|slashing|thunder)(?: damage)?$/i;
+    const icon = control.querySelector?.('[class*="damage-type"][aria-label], [data-original-title]');
+    const container = control.closest('.ddbc-note-components__component');
+    const nearby = container?.querySelector?.('[class*="damage-type"][aria-label], [data-original-title]');
+    const candidates = [control.getAttribute('data-damage-type'), control.getAttribute('data-damagetype'), icon?.getAttribute('aria-label'), icon?.getAttribute('data-original-title'), nearby?.getAttribute('aria-label'), nearby?.getAttribute('data-original-title'), control.nextSibling?.textContent?.trim()];
+    const match = candidates.map(value => String(value || '').trim().match(types)).find(Boolean);
+    const damageType = match ? match[1][0].toUpperCase() + match[1].slice(1).toLowerCase() : '';
+    // The game log appends the damage type after its colon.
+    const title = formula;
+    return {name:title, godiceNoteTitle:title, godiceNoteDamageType:damageType, 'damage-types':damageType ? [damageType] : []};
+}
+
+function getGoDiceWeaponDamage(name, sidebarValue) {
+    const normalizeName = text => String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    // The main combat Damage column has the complete formula. Do not search
+    // the Notes column or let sidebar additional damage stand in for it.
+    for (const row of document.querySelectorAll('.ct-combat-attack, .ddbc-combat-attack')) {
+        const label = row.querySelector('.ct-combat-attack__label, .ddbc-combat-attack__label');
+        if (!label || normalizeName(label.textContent) !== normalizeName(name)) continue;
+        const primary = row.querySelector('.ct-combat-attack__damage .integrated-dice__container, .ddbc-combat-attack__damage .integrated-dice__container');
+        if (primary) {
+            const formula = normalizeDDBDamageFormula(primary.textContent);
+            if (/^\d*d\d+(?:\s*[+-]\s*(?:\d*d\d+|\d+))*$/i.test(formula)) return formula;
+        }
+    }
+    // Non-combat pages still use their sidebar; explicitly exclude optional
+    // and versatile damage from this primary component.
+    const excluded = '.ct-item-detail__additional-damage, .ddbc-item-detail__additional-damage, .ct-item-detail__versatile-damage, .ddbc-item-detail__versatile-damage';
+    const primary = selector => sidebarValue.find(selector).filter((idx, el) => !$(el).closest(excluded).length);
+    const text = primary('.ct-damage__value,.ddbc-damage__value').text() || primary('.integrated-dice__container').first().text();
+    return normalizeDDBDamageFormula(text);
+}
+
+function normalizeDDBDamageFormula(text) {
+    const compact = String(text).replace(/\s+/g, '');
+    const repeated = compact.match(/^(.+?)\1+$/);
+    return repeated && /^\d*d\d+(?:[+-]\d+(?:d\d+)?)*$/i.test(repeated[1]) ? repeated[1] : text.trim();
+}
+
+// Sidebar damage buttons are not inside combat/spell list rows.
+function handlePaneIntegratedDie(target) {
+    if (target.closest('.ct-combat-attack, .ddbc-combat-attack, .ct-spells-spell, .ddbc-spells-spell')) return false;
+    const pane = target.closest('.b20-item-pane, .b20-action-pane, .b20-custom-action-pane, .ct-custom-action-pane, .ct-spell-pane');
+    if (!pane) return false;
+    const formula = (target.textContent || '').trim();
+    const description = target.closest('.ct-item-detail__description, .ddbc-item-detail__description, .ct-spell-detail__description, .ddbc-spell-detail__description, .ct-action-detail__description, .ddbc-action-detail__description, div[class*="styles_description"]');
+    const property = target.closest('[role="list"] > div');
+    const note = property && Object.keys(propertyListToDict($(property))).some(key => /^notes?$/i.test(key));
+    if ((description || note) && /d\d+/i.test(formula)) {
+        sendRoll(character, 'custom', normalizeDDBDamageFormula(formula), {name:'Additional damage'});
+        return true;
+    }
+    const damage = /d(?:4|6|8|10|12|100)(?!\d)/i.test(formula) || /^\d+(?:\.\d+)?$/.test(formula);
+    const attack = /d20/i.test(formula) || /^[+-]\s*\d+$/.test(formula);
+    if (!damage && !attack) return false;
+    const paneClass = ['b20-item-pane', 'b20-action-pane', 'b20-custom-action-pane', 'ct-custom-action-pane', 'ct-spell-pane'].find(cls => pane.classList.contains(cls));
+    resetHijackQuickRollState();
+    execute(paneClass, {force_damages_only: damage, force_to_hit_only: !damage});
+    return true;
+}
+
 function installDDBRollHijack() {
     if (ddbRollHijackInstalled) return;
     ddbRollHijackInstalled = true;
 
     const selector = [
         "button.integrated-dice__container.beyond20-quick-roll-area",
-        "button.integrated-dice__container",
+        ".integrated-dice__container",
 
         ".ct-saving-throws-summary__ability .ct-saving-throws-summary__ability-modifier",
         ".ddbc-saving-throws-summary__ability .ddbc-saving-throws-summary__ability-modifier",
@@ -3596,6 +3663,7 @@ function installDDBRollHijack() {
 
     const routeTarget = (target) => {
         if (!target) return false;
+        if (settings['use-godice'] && handlePaneIntegratedDie(target)) return true;
         if (handleCombatAttackIntegratedDie(target)) return true;
         if (handleSpellIntegratedDie(target)) return true;
         if (handleInitiativeIntegratedDie(target)) return true;
@@ -3605,28 +3673,72 @@ function installDDBRollHijack() {
         return false;
     };
 
+    document.addEventListener('Beyond20_GoDiceIntent', event => {
+        if (!settings['use-godice']) return;
+        let id;
+        try { id = JSON.parse(event.detail).id; } catch (_) { return; }
+        if (typeof id !== 'string' || !/^[a-z0-9-]+$/i.test(id)) return;
+        const target = document.querySelector('[data-beyond20-godice-target="' + id + '"]');
+        if (!target) return;
+        const constant = (target.textContent || '').trim();
+        if (/^\d+(?:\.\d+)?$/.test(constant)) {
+            const damageControl = target.closest('.ct-combat-attack__damage, .ddbc-combat-attack__damage, .ct-damage, .ddbc-damage');
+            if (damageControl) {
+                const row = target.closest('.ct-combat-attack, .ddbc-combat-attack');
+                const name = row ? $(row).find('.ct-combat-attack__label, .ddbc-combat-attack__label').first().text().trim() : '';
+                const metadata = getGoDiceNoteRollArgs(damageControl, constant);
+                sendRoll(character, 'attack', constant, {
+                    name: name || 'Fixed damage', damages:[constant],
+                    'damage-types':[metadata.godiceNoteDamageType || ''],
+                    rollAttack:false, rollDamage:true, rollCritical:false, advantage:0
+                });
+                return;
+            }
+        }
+        const noteControl = target.closest('.ddb-note-roll, .avtt-roll-formula-button, .avtt-roll-button');
+        if (noteControl) {
+            const expression = noteControl.getAttribute('data-exp');
+            const raw = expression ? expression + (noteControl.getAttribute('data-mod') || '') : noteControl.textContent;
+            const formula = normalizeDDBDamageFormula(raw);
+            if (/^\s*\d*d\d+(?:\s*[+-]\s*(?:\d*d\d+|\d+))*\s*$/i.test(formula)) {
+                sendRoll(character, 'custom', formula, getGoDiceNoteRollArgs(noteControl, formula));
+            } else console.warn('Beyond20 GoDice: unsupported notes formula', raw);
+            return;
+        }
+        const custom = target.closest('.ct-beyond20-custom-roll');
+        if (custom) {
+            const formula = custom.querySelector('[x-beyond20-roll]');
+            if (formula) sendRoll(character, 'custom', formula.getAttribute('x-beyond20-roll'), {name:formula.getAttribute('x-beyond20-name')});
+            return;
+        }
+        if (!routeTarget(target)) console.warn('Beyond20 GoDice: no roll handler for control', target);
+    });
+    const pageCapturesGoDice = () => settings['use-godice'] && document.documentElement.dataset.beyond20GodiceCaptureReady === 'true';
+
     const interceptPointer = (event) => {
+        if (pageCapturesGoDice()) return;
         if (event.button !== 0) return;
         const target = event.target.closest(selector);
         if (!target) return;
 
-        ddbHijackPointerHandled = true;
+        ddbHijackPointerHandled = target;
         swallowRollEvent(event);
 
         const handled = routeTarget(target);
         if (!handled) {
-            ddbHijackPointerHandled = false;
+            ddbHijackPointerHandled = null;
         }
     };
 
     const interceptClick = (event) => {
+        if (pageCapturesGoDice()) return;
         if (event.button !== 0) return;
         const target = event.target.closest(selector);
         if (!target) return;
 
-        if (ddbHijackPointerHandled) {
+        if (ddbHijackPointerHandled === target) {
             swallowRollEvent(event);
-            ddbHijackPointerHandled = false;
+            ddbHijackPointerHandled = null;
             return;
         }
 
@@ -3636,9 +3748,17 @@ function installDDBRollHijack() {
 
     window.addEventListener("pointerdown", interceptPointer, true);
 
+    // React may roll on mousedown, before the click we already intercept.
+    for (const eventName of ['mousedown', 'mouseup', 'pointerup']) {
+        window.addEventListener(eventName, event => {
+            if (!pageCapturesGoDice() && settings['use-godice'] && event.button === 0 && event.target.closest(selector))
+                swallowRollEvent(event);
+        }, true);
+    }
     window.addEventListener("click", interceptClick, true);
 
     window.addEventListener("keydown", (event) => {
+        if (pageCapturesGoDice()) return;
         if (event.key !== "Enter" && event.key !== " ") return;
 
         const target = event.target.closest(selector);

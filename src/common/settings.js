@@ -127,6 +127,14 @@ const options_list = {
         "advanced": true
     },
 
+    "use-godice": {
+        "short": "Use GoDice physical dice",
+        "title": "Use GoDice physical dice",
+        "description": "Use GoDice on this D&D Beyond tab instead of digital dice. Connect using the GoDice bar. Enable Send rolls to the D&D Beyond Game Log to share results with AboveVTT. Requires Web Bluetooth (Chrome/Edge).",
+        "type": "bool",
+        "default": false
+    },
+
     "use-digital-dice": {
         "short": "Use D&D Beyond's Digital Dice",
         "title": "Use D&D Beyond's Digital Dice",
@@ -1087,11 +1095,18 @@ function getStoredSettings(cb, key = "settings", _list = options_list) {
             console.log("Beyond20: Migrated some keys:", stored_settings);
             storageSet(key, stored_settings);
         }
+        if (key === "settings") normalizeDiceSettings(stored_settings);
         cb(stored_settings);
     });
 }
 
+function normalizeDiceSettings(settings) {
+    if (settings["use-godice"]) settings["use-digital-dice"] = false;
+    return settings;
+}
+
 function setSettings(settings, cb = null, key = "settings") {
+    if (key === "settings") normalizeDiceSettings(settings);
     storageSet(key, settings, (settings) => {
         console.log("Beyond20: Saved settings (" + key + "): ", settings);
         if (cb)
@@ -1102,6 +1117,8 @@ function setSettings(settings, cb = null, key = "settings") {
 function mergeSettings(settings, cb = null, key = "settings", _list = options_list) {
     console.log("Saving new settings (" + key + "): ", settings);
     getStoredSettings((stored_settings) => {
+        if (key === "settings" && settings["use-digital-dice"] === true && settings["use-godice"] === undefined)
+            stored_settings["use-godice"] = false;
         for (let k in settings)
             stored_settings[k] = settings[k];
         setSettings(stored_settings, cb, key);
@@ -1193,6 +1210,11 @@ function createHTMLOptionEx(name, option, short = false, {advanced=false}={}) {
         );
     } else if (option.type == "special") {
         e = option.createHTMLElement(name, short);
+    }
+    if (["use-godice", "use-digital-dice"].includes(name) && e) {
+        $(e).find("input").on("change", function () {
+            if (this.checked) $("#" + (name === "use-godice" ? "use-digital-dice" : "use-godice")).prop("checked", false);
+        });
     }
     return e;
 }

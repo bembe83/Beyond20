@@ -666,9 +666,9 @@ async function sendRoll(character, rollType, fallback, args) {
         }
     }
 
-    if (character.getGlobalSetting("use-digital-dice", false) && DigitalDiceManager.isEnabled()) {
+    if (character.getGlobalSetting("use-godice", false) || (character.getGlobalSetting("use-digital-dice", false) && DigitalDiceManager.isEnabled())) {
         req.sendMessage = true;
-        dndbeyondDiceRoller.handleRollRequest(req);
+        dndbeyondDiceRoller.handleRollRequest(req).catch(error => dndbeyondDiceRoller._displayer.displayError(error.message));
     } else {
         console.log("Sending message: ", req);
         chrome.runtime.sendMessage(req, (resp) => beyond20SendMessageFailure(character, resp));
@@ -1013,6 +1013,7 @@ function injectDiceToRolls(selector, character, name = "", replacementFn = null)
 
     $(".ct-beyond20-custom-roll").off('click')
         .on('click', (event) => {
+        if (character.getGlobalSetting('use-godice', false)) { event.preventDefault(); event.stopImmediatePropagation(); }
         const name = $(event.currentTarget).find("img").attr("x-beyond20-name");
         const roll = $(event.currentTarget).find("img").attr("x-beyond20-roll");
         sendRoll(character, "custom", roll, { "name": name });
@@ -1091,6 +1092,7 @@ function activateTooltipListeners(el, direction, tooltip, callback) {
         el.off('click').on('click', (e) => {
             if ($(e.currentTarget).hasClass('integrated-dice__container') || $(e.currentTarget).find(".integrated-dice__container").length > 0) {
                 e.stopPropagation();
+                if (dndbeyondDiceRoller._settings['use-godice']) { e.preventDefault(); e.stopImmediatePropagation(); }
             }
             callback(el);
         })

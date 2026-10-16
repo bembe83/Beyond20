@@ -53,6 +53,7 @@
 		"dist/roll20_script.js",
 		"dist/fvtt_script.js",
         "dist/dndbeyond_mb.js",
+        "dist/godice_page.js",
 		"popup.html",
 		"options.html"
 	],

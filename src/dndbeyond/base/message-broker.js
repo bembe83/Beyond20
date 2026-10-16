@@ -116,6 +116,11 @@ class DDBMessageBroker {
     }
 
     _onDispatchMessage(message) {
+        // GoDice is the selected dice source. Never publish a competing native
+        // DDB roll; only the completed physical result carries this marker.
+        if (document.documentElement.dataset.beyond20GodiceEnabled === 'true' &&
+            message?.eventType?.startsWith('dice/roll/') && !message.data?.__b20Override__) return;
+
         if (this._debug) console.log("Dispatching ", message);
 
         const blockIndex = this._blockMessages.findIndex(msg => msg.type === message.eventType);
@@ -171,7 +176,7 @@ class DDBMessageBroker {
         return context;
     }
 
-    postMessage(data) {
+    postMessage(data, {physical = false} = {}) {
         this.register();
         if (!this._mb) return;
 
@@ -204,7 +209,15 @@ class DDBMessageBroker {
         }
 
         data.userId = data.userId || this._mb.userId;
-        this._mb.dispatch(this._cleanupPostData(data));
+        const message = this._cleanupPostData(data);
+        // AboveVTT drops standalone fulfilled messages in its native-roll
+        // wrapper. Its saved dispatcher accepts completed physical results.
+        if (physical && typeof window.diceRoller?.ddbDispatch === 'function') {
+            window.diceRoller.ddbDispatch(message);
+            if (typeof window.diceRoller.ddbonmessage === 'function')
+                window.diceRoller.ddbonmessage({data: JSON.stringify(message)});
+        } else this._mb.dispatch(message);
+        return message;
     }
 
     _cleanupPostData(data) {

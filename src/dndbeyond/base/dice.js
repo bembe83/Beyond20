@@ -16,8 +16,13 @@ class DNDBDisplayer {
             "</div>";
         // Avoid having duplicate results displayed
         DigitalDiceManager.clearResults();
-        const dlg = alertify.Beyond20Roll(title, content);
-        dlg.set('onclose', () => {
+        const physical = !!dndbeyondDiceRoller._settings['use-godice'];
+        if (physical && !alertify.Beyond20GoDiceResult)
+            alertify.dialog('Beyond20GoDiceResult', function () { return {}; }, false, 'alert');
+        const dlg = physical ? alertify.Beyond20GoDiceResult(title, content) : alertify.Beyond20Roll(title, content);
+        // Alertify reuses this dialog. Destroying it from onclose invalidates
+        // its root/buttons while Alertify is still processing the close.
+        if (!physical) dlg.set('onclose', () => {
             dlg.set('onclose', null);
             dlg.destroy();
         });
@@ -58,9 +63,18 @@ class DNDBDisplayer {
         return req;
     }
     async sendMessage(request, title, html, character, whisper, play_sound, source, attributes, description, attack_rolls, roll_info, damage_rolls, total_damages, open) {
+        if (dndbeyondDiceRoller._settings['use-godice']) {
+            try { this.postHTML(request, title, html, character, whisper, play_sound, source, attributes, description, attack_rolls, roll_info, damage_rolls, total_damages, open); }
+            catch (error) { console.error('GoDice result display failed:', error); }
+        }
         const req = await this.sendMessageToDOM(request, title, html, character, whisper, play_sound, source, attributes, description, attack_rolls, roll_info, damage_rolls, total_damages, open);        
         console.log("Sending message: ", req);
-        chrome.runtime.sendMessage(req, (resp) => beyond20SendMessageFailure(character, resp));
+        chrome.runtime.sendMessage(req, (resp) => {
+            // AboveVTT consumes the DDB game-log publication, not an external
+            // Roll20/Foundry tab. The local GoDice result is already displayed.
+            if (dndbeyondDiceRoller._settings['use-godice'] && resp?.error?.startsWith('No VTT found')) return;
+            beyond20SendMessageFailure(character, resp);
+        });
     }
     displayError(message) {
         alertify.error(message);
@@ -77,7 +91,10 @@ class DNDBRoller {
     }
     async resolveRolls(name, rolls, request={}) {
         
-        if (dndbeyondDiceRoller._settings['use-digital-dice'] && DigitalDiceManager.isEnabled()) {
+        if (dndbeyondDiceRoller._settings['use-godice']) {
+            if (!rolls.length) return; // No completed values to publish in this phase.
+            await new GoDice(name, rolls, request).roll();
+        } else if (dndbeyondDiceRoller._settings['use-digital-dice'] && DigitalDiceManager.isEnabled()) {
             const digital = new DigitalDice(name, rolls, {whisper: request.whisper === WhisperType.YES});
             try {
                 await digital.roll();
@@ -92,10 +109,13 @@ class DNDBRoller {
         const rollInfo = {
             name,
             rolls: rolls.map(r => r.toJSON()),
-            request
+            request: {...request, godice: !!dndbeyondDiceRoller._settings["use-godice"]}
         }
         if (dndbeyondDiceRoller._settings["roll-to-game-log"]) {
-            sendCustomEvent("MBFulfilledRoll", [rollInfo]);
+            if (rollInfo.request.godice) {
+                try { await GoDice.request('publish', {rollInfo}); }
+                catch (error) { console.error('GoDice game log publication failed:', error); dndbeyondDiceRoller._displayer.displayError(error.message); }
+            } else sendCustomEvent("MBFulfilledRoll", [rollInfo]);
         }
     }
 }
@@ -111,6 +131,12 @@ class DNDBPrompter {
 const dndbeyondDiceRoller = new Beyond20RollRenderer(new DNDBRoller(), new DNDBPrompter(), new DNDBDisplayer());
 dndbeyondDiceRoller.setBaseURL(chrome.runtime.getURL(""));
 dndbeyondDiceRoller.setSettings(getDefaultSettings());
+const originalGoDiceHandleRequest = dndbeyondDiceRoller.handleRollRequest;
+dndbeyondDiceRoller.handleRollRequest = async function(request) {
+    if (this._settings['use-godice']) request = await GoDice.prepareD20Request(request);
+    return originalGoDiceHandleRequest.call(this, request);
+};
+
 dndbeyondDiceRoller.handleRollError = (request, error) => {
     dndbeyondDiceRoller._displayer.setError(error);
     if (request.action === "rendered-roll") {

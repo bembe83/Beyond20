@@ -17,6 +17,8 @@ const ROLL_RENDERER_DEPS = [
 const DNDBEYOND_PAGE_DEPS = [
     ...ROLL_RENDERER_DEPS,
     "src/dndbeyond/base/digital-dice.js",
+    "src/dndbeyond/base/godice.js",
+    "src/dndbeyond/base/game-log-sizing.js",
     "src/dndbeyond/base/dice.js",
     "src/dndbeyond/base/base.js",
     "src/dndbeyond/base/hotkeys.js",
@@ -28,6 +30,8 @@ const DNDBEYOND_PAGE_DEPS = [
 const DNDBEYOND_CHARACTER_PAGE_DEPS = [
     ...ROLL_RENDERER_DEPS,
     "src/dndbeyond/base/digital-dice-new.js",
+    "src/dndbeyond/base/godice.js",
+    "src/dndbeyond/base/game-log-sizing.js",
     "src/dndbeyond/base/dice.js",
     "src/dndbeyond/base/base.js",
     "src/dndbeyond/base/hotkeys.js",
@@ -37,6 +41,14 @@ const DNDBEYOND_CHARACTER_PAGE_DEPS = [
 ];
 
 const SRC_FILES = {
+    godice_page: [
+        "src/common/sandbox-header.js",
+        "libs/jquery-3.4.1.min.js",
+        "src/dndbeyond/page-scripts/godice-jquery.js",
+        "libs/godice-roller.bundle.js",
+        "src/dndbeyond/page-scripts/godice.js",
+        "src/common/sandbox-footer.js"
+    ],
     background: [
         "src/common/constants.js",
         "src/common/utils.js",
