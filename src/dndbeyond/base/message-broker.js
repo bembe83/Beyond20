@@ -119,7 +119,7 @@ class DDBMessageBroker {
         // GoDice is the selected dice source. Never publish a competing native
         // DDB roll; only the completed physical result carries this marker.
         if (document.documentElement.dataset.beyond20GodiceEnabled === 'true' &&
-            message?.eventType?.startsWith('dice/roll/') && !message.data?.__b20Override__) return;
+            message?.eventType?.startsWith('dice/roll/') && !message.data?.__b20Override__ && !message.data?.injected_data?.beyond20GoDice) return;
 
         if (this._debug) console.log("Dispatching ", message);
 

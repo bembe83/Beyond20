@@ -135,6 +135,15 @@ const options_list = {
         "default": false
     },
 
+    "godice-branded-chat": {
+        "short": "Use GoDice branded AboveVTT chat cards",
+        "short_description": "Share GoDice cards with the logo and attribution. Requires AboveVTT.",
+        "title": "Use GoDice branded AboveVTT chat cards",
+        "description": "Experimental: send GoDice results as shared HTML cards with the GoDice logo. Receiving players need AboveVTT, but not this Beyond20 fork. Without AboveVTT, use native D&D Beyond dice cards.",
+        "type": "bool",
+        "default": false
+    },
+
     "use-digital-dice": {
         "short": "Use D&D Beyond's Digital Dice",
         "title": "Use D&D Beyond's Digital Dice",

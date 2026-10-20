@@ -289,5 +289,92 @@ const formulas = async (rule, options) => {
     const rowWithoutNotes = {querySelector:selector => selector.includes('__label') ? {textContent:'Greatsword'} : selector.includes('__damage .integrated-dice') ? primaryWeapon : null};
     routing.document.querySelectorAll = () => [rowWithoutNotes];
     assert.equal(routing.getGoDiceWeaponDamage('Greatsword',unusedSidebar),'2d6+4');
+    const sharedCards=[];
+    const chatContext = vm.createContext({console,window:{
+        PLAYER_NAME:'Geralt', PLAYER_ID:'123',
+        godice:{godiceext:{godicelogo:'<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>'}},
+        MB:{inject_chat:async data=>sharedCards.push(data)}
+    }});
+    vm.runInContext(fs.readFileSync('src/dndbeyond/page-scripts/godice-chat.js','utf8'),chatContext);
+    const brandedInfo = {name:'Sword <script>',rolls:[{type:'damage'}],request:{godice:true,godiceBrandedChat:true,character:{name:'Geralt'},whisper:0}};
+    const brandedRolls = [{rollType:'Slashing',diceNotationStr:'2d6+4',result:{text:'3+2+4',total:9}}];
+    assert.equal(await chatContext.publishGoDiceChatCard(brandedInfo,brandedRolls),true);
+    assert.match(sharedCards[0].text,/Rolled with GoDice/);
+    assert.match(sharedCards[0].text,/data:image\/svg\+xml/);
+    assert.match(sharedCards[0].text,/Sword &lt;script&gt;/);
+    assert.equal(sharedCards[0].result,9);
+    assert.equal(sharedCards[0].whisper,'');
+    brandedInfo.request.whisper=1;
+    await chatContext.publishGoDiceChatCard(brandedInfo,brandedRolls);
+    assert.equal(sharedCards[1].whisper,'Geralt');
+    delete chatContext.window.PLAYER_NAME;
+    assert.equal(await chatContext.publishGoDiceChatCard(brandedInfo,brandedRolls),false);
+    brandedInfo.request.whisper=0;
+    brandedInfo.request.godiceBrandedChat=false;
+    assert.equal(await chatContext.publishGoDiceChatCard(brandedInfo,brandedRolls),false);
+    brandedInfo.request.godiceBrandedChat=true;
+    delete chatContext.window.MB;
+    assert.equal(await chatContext.publishGoDiceChatCard(brandedInfo,brandedRolls),false);
+    chatContext.window.MB={inject_chat:async data=>sharedCards.push(data)};
+    chatContext.b20BuildDdbRollsForGameLog = ()=>brandedRolls;
+    chatContext.messageBroker={register(){throw new Error('Do not duplicate an HTML card with a native dice message');}};
+    const brokerPage = fs.readFileSync('src/dndbeyond/page-scripts/message-broker.js','utf8');
+    vm.runInContext(brokerPage.slice(brokerPage.indexOf('    async function fulfilledRoll'),brokerPage.indexOf('    window.__beyond20PublishGoDice')),chatContext);
+    await chatContext.fulfilledRoll(brandedInfo);
+    assert.equal(sharedCards.length,3);
+    brokerContext.document.documentElement.dataset.beyond20GodiceEnabled='true';
+    const beforeInjected=sent.length;
+    broker._onDispatchMessage({eventType:'dice/roll/pending',data:{injected_data:{beyond20GoDice:true}}});
+    assert.equal(sent.length,beforeInjected+1,'allow only marked GoDice HTML-chat injection through native suppression');
+    chatContext.resolveGoDiceSetId = async () => chatContext.window.mydice?.data?.setId;
+    const nativeMessages=[];
+    chatContext.messageBroker={register(){},_mb:{userId:'user'},getContext:()=>({messageScope:'gameId',messageTarget:'campaign'}),postMessage:message=>nativeMessages.push(message)};
+    chatContext.normalizeActionName=name=>name;
+    chatContext.uuidv4=()=>'native-message';
+    chatContext.B20_OVERRIDE_MARKER='__b20Override__';
+    chatContext.window.mydice={data:{setId:'06002'}};
+    brandedInfo.request.godiceBrandedChat=false;
+    await chatContext.fulfilledRoll(brandedInfo);
+    assert.equal(nativeMessages[0].data.setId,'06002');
+    assert.equal('imageUrl' in nativeMessages[0].data,false);
+    delete chatContext.window.mydice;
+    await chatContext.fulfilledRoll(brandedInfo);
+    assert.equal('setId' in nativeMessages[1].data,false);
+    let configCalls=0;
+    let settingsNow=1000;
+    const settingsWarnings=[];
+    const settingsContext=vm.createContext({window:{mydice:{data:{setId:'06002'}}},
+        console:{warn:message=>settingsWarnings.push(message)},
+        Date:{now:()=>settingsNow},AbortController,setTimeout,clearTimeout,
+        fetch:async (url,options)=>{
+            configCalls++;
+            if (url.includes('cobalt-token')) {
+                assert.equal(options.method,'POST');assert.equal(options.credentials,'include');
+                return {ok:true,json:async()=>({token:'test-session-token'})};
+            }
+            assert.equal(url,'https://dice-service.dndbeyond.com/diceuserconfig/v1/get');
+            assert.equal(options.headers.Authorization,'Bearer test-session-token');
+            return {ok:true,json:async()=>({data:{setId:'05001'}})};
+        }
+    });
+    vm.runInContext(fs.readFileSync('src/dndbeyond/page-scripts/godice-dice-settings.js','utf8')+'\nthis.resolveSetId = resolveGoDiceSetId;',settingsContext);
+    assert.equal(await settingsContext.resolveSetId(),'06002');
+    assert.equal(configCalls,0);
+    delete settingsContext.window.mydice;
+    assert.deepEqual(await Promise.all([settingsContext.resolveSetId(),settingsContext.resolveSetId()]),['05001','05001']);
+    assert.equal(configCalls,2,'one shared auth/config request for concurrent rolls');
+    assert.equal(await settingsContext.resolveSetId(),'05001');
+    assert.equal(configCalls,2,'cache avoids fetching on each roll');
+    settingsContext.window.mydice={data:{setId:'07001'}};
+    assert.equal(await settingsContext.resolveSetId(),'07001');
+    delete settingsContext.window.mydice;
+    settingsNow+=61000;
+    settingsContext.fetch=async()=>{configCalls++;return {ok:false,status:403};};
+    assert.equal(await settingsContext.resolveSetId(),undefined);
+    assert.equal(configCalls,3);
+    assert.equal(await settingsContext.resolveSetId(),undefined);
+    assert.equal(configCalls,3,'failed requests have a short retry cooldown');
+    assert.equal(settingsWarnings.length,1);
+    assert.equal(settingsWarnings[0].includes('test-session-token'),false);
     console.log('PASS GoDice critical formulas, bonus dice, one damage batch, roll objects, advantage, unsupported rule, validation, settings');
 })().catch(error => { console.error(error); process.exitCode = 1; });

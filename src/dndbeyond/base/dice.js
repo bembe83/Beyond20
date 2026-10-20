@@ -109,7 +109,7 @@ class DNDBRoller {
         const rollInfo = {
             name,
             rolls: rolls.map(r => r.toJSON()),
-            request: {...request, godice: !!dndbeyondDiceRoller._settings["use-godice"]}
+            request: {...request, godice: !!dndbeyondDiceRoller._settings["use-godice"], godiceBrandedChat: !!dndbeyondDiceRoller._settings["godice-branded-chat"]}
         }
         if (dndbeyondDiceRoller._settings["roll-to-game-log"]) {
             if (rollInfo.request.godice) {

@@ -46,3 +46,25 @@ then normal and critical `2d6+4` damage with each supported critical rule.
 Verify one damage dice popup, the displayed breakdown, and one native damage
 entry in the game log/AboveVTT. Also verify both settings switches and a whisper.
 Native outgoing D&D Beyond dice messages are suppressed while GoDice is selected; incoming rolls from other players are unaffected. Bluetooth and live D&D Beyond/AboveVTT delivery require this browser check.
+
+## Experimental shared GoDice branding
+
+Enable **Use GoDice branded AboveVTT chat cards** next to the GoDice toggle in Beyond20's settings.
+When AboveVTT's HTML chat is available, results use a custom card containing an
+embedded GoDice logo and **Rolled with GoDice**. Receiving players need AboveVTT
+but do not need this Beyond20 fork. The native dice-pack preview is replaced by
+this card. Without AboveVTT, native D&D Beyond publication remains in use.
+AboveVTT replaces the live game-log entry with the HTML card. Refreshing the
+page can restore D&D Beyond's underlying placeholder/default entry; custom-card
+persistence is not provided by this integration.
+Disable the setting to return to native cards. Verify delivery with another
+player's AboveVTT client; embedded-image rendering has not been browser-tested.
+
+## Native dice-pack selection
+
+Native messages first use AboveVTT's `window.mydice.data.setId` when available.
+Otherwise Beyond20 requests the logged-in user's dice configuration directly
+from D&D Beyond. Successful lookups are cached for 60 seconds and concurrent
+lookups share one request. Failed lookups wait 30 seconds before retrying and
+fall back to D&D Beyond's default pack, without preventing roll publication.
+The fallback does not store or log the authentication token.

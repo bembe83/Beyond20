@@ -438,6 +438,25 @@ span.dice-roll.beyond20-tooltip-content {
     min-width:auto;
 }
 
+/* Preserve title newlines sent with GoDice rolls, with the type on its own line. */
+html[data-beyond20-godice-enabled="true"] [class*="-Line-Title"] {
+    white-space: pre !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    height: auto !important;
+}
+
+html[data-beyond20-godice-enabled="true"] [class*="-Line-Title"] [class*="-Action"] {
+    white-space: pre !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}
+
+html[data-beyond20-godice-enabled="true"] [class*="-Line-Title"] [class*="-RollType"] {
+    display: block !important;
+    white-space: normal !important;
+}
+
 /* Physical GoDice values are authoritative. Hide DDB's decorative dice canvas
    while this tab uses GoDice, including when AboveVTT is not running. */
 html[data-beyond20-godice-enabled="true"] canvas.dice-rolling-panel__container,

@@ -483,10 +483,12 @@ if (!window.__beyond20_mb2_initialized__) {
         });
     }
 
-    function fulfilledRoll(rollData) {
+    async function fulfilledRoll(rollData) {
         if (!rollData) return;
         if (rollData.request?.godice) {
             if (!Array.isArray(rollData.rolls) || !rollData.rolls.length) return;
+            const converted = b20BuildDdbRollsForGameLog(rollData.rolls, rollData.request);
+            if (await publishGoDiceChatCard(rollData, converted)) return;
             messageBroker.register();
             if (!messageBroker._mb) throw new Error('D&D Beyond game log is not ready.');
             const context = messageBroker.getContext(rollData.request.character);
@@ -494,13 +496,16 @@ if (!window.__beyond20_mb2_initialized__) {
                 context.messageScope = 'userId';
                 context.messageTarget = messageBroker._mb.userId;
             }
+            const setId = await resolveGoDiceSetId();
             messageBroker.postMessage({
                 eventType: 'dice/roll/fulfilled', source: 'web', persist: true,
                 messageScope: context.messageScope, messageTarget: context.messageTarget,
                 data: {
-                    action: normalizeActionName(rollData.name), context,
-                    ...(window.mydice?.data?.setId ? {setId: window.mydice.data.setId} : {}),
-                    rollId: uuidv4(), rolls: b20BuildDdbRollsForGameLog(rollData.rolls, rollData.request),
+                    action: normalizeActionName(rollData.name).split(/\s+/).map((word, index) =>
+                        (index > 0 && index % 3 === 0 ? '\n' : index > 0 ? ' ' : '') + word
+                    ).join(''), context,
+                    ...(setId ? {setId} : {}),
+                    rollId: uuidv4(), rolls: converted,
                     [B20_OVERRIDE_MARKER]: true
                 }
             }, {physical: true});

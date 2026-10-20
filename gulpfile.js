@@ -161,6 +161,8 @@ const SRC_FILES = {
         "src/common/sandbox-header.js",
         "src/common/utils.js",
 		"src/dndbeyond/base/message-broker.js",
+		"src/dndbeyond/page-scripts/godice-dice-settings.js",
+		"src/dndbeyond/page-scripts/godice-chat.js",
 		"src/dndbeyond/page-scripts/message-broker.js",
         "src/common/sandbox-footer.js"
 	]
