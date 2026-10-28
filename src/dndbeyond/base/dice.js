@@ -86,6 +86,9 @@ class DNDBDisplayer {
 }
 
 class DNDBRoller {
+    get handlesAdvantage() {
+        return !!dndbeyondDiceRoller._settings['use-godice'];
+    }
     roll(formula, data) {
         return new DNDBRoll(formula, data);
     }
@@ -131,12 +134,6 @@ class DNDBPrompter {
 const dndbeyondDiceRoller = new Beyond20RollRenderer(new DNDBRoller(), new DNDBPrompter(), new DNDBDisplayer());
 dndbeyondDiceRoller.setBaseURL(chrome.runtime.getURL(""));
 dndbeyondDiceRoller.setSettings(getDefaultSettings());
-const originalGoDiceHandleRequest = dndbeyondDiceRoller.handleRollRequest;
-dndbeyondDiceRoller.handleRollRequest = async function(request) {
-    if (this._settings['use-godice']) request = await GoDice.prepareD20Request(request);
-    return originalGoDiceHandleRequest.call(this, request);
-};
-
 dndbeyondDiceRoller.handleRollError = (request, error) => {
     dndbeyondDiceRoller._displayer.setError(error);
     if (request.action === "rendered-roll") {

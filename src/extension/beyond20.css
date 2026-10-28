@@ -438,21 +438,21 @@ span.dice-roll.beyond20-tooltip-content {
     min-width:auto;
 }
 
-/* Preserve title newlines sent with GoDice rolls, with the type on its own line. */
-html[data-beyond20-godice-enabled="true"] [class*="-Line-Title"] {
+/* Preserve game-log title newlines, with the roll type on its own line. */
+[class*="-Line-Title"] {
     white-space: pre !important;
     overflow: visible !important;
     text-overflow: clip !important;
     height: auto !important;
 }
 
-html[data-beyond20-godice-enabled="true"] [class*="-Line-Title"] [class*="-Action"] {
+[class*="-Line-Title"] [class*="-Action"] {
     white-space: pre !important;
     overflow: visible !important;
     text-overflow: clip !important;
 }
 
-html[data-beyond20-godice-enabled="true"] [class*="-Line-Title"] [class*="-RollType"] {
+[class*="-Line-Title"] [class*="-RollType"] {
     display: block !important;
     white-space: normal !important;
 }

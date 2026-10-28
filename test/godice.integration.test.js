@@ -2,69 +2,162 @@ const fs = require('fs');
 const vm = require('vm');
 const assert = require('assert/strict');
 const bundle = fs.readFileSync('libs/godice-roller.bundle.js', 'utf8');
-const start = bundle.indexOf('window.godice.prepareBeyond20Damage =');
-const end = bundle.indexOf('window.godice.utils =', start);
-let choice = {bonus:'', rolltype:0};
-const context = vm.createContext({console, window:{godice:{}}, RollBonusPrompt: class {
-    async showRollBonusPrompt() { return choice; }
-}});
-vm.runInContext(bundle.slice(start, end), context);
+let choice = {bonus:'', rolltype:0, advdis:0, elven:false};
+let entered = [];
+let dicePrompts = [];
+const math = Object.create(Math);
+math.random = () => 0.5;
+const context = vm.createContext({console:{...console,debug(){}}, Math:math, window:{godice:{}},
+    RollBonusPrompt:class {async showRollBonusPrompt() { return choice; }},
+    DiceRollPrompt:class {async showDicePrompt(formula, prompts) {
+        dicePrompts.push({formula,prompts});
+        return prompts.map(prompt=>({name:prompt.name+'-'+prompt.index,
+            valueAsNumber:entered.length ? entered.shift() : NaN, placeholder:String(prompt.diePlaceholder)}));
+    }}
+});
+vm.runInContext(bundle.slice(bundle.indexOf('function rollDice(numberOfSides)'),bundle.indexOf('class DiceBar {')) +
+    '\nthis.LibraryRollResult = RollResult;',context);
 vm.runInContext(fs.readFileSync('src/common/dice.js','utf8') + '\n' + fs.readFileSync('src/dndbeyond/base/godice.js','utf8') + '\nthis.GoDiceAdapter = GoDice; this.Roll = DNDBRoll;', context);
 context.CriticalRules = {PHB:0, HOMEBREW_MAX:1};
 context.dndbeyondDiceRoller = {_settings:{'critical-homebrew':0}};
-const prepare = context.window.godice.prepareBeyond20Damage;
-const formulas = async (rule, options) => {
-    choice = options;
-    return Array.from((await prepare(['2d6+4'],rule)).formulas);
+const library=new context.LibraryRollResult();
+const Adapter=context.GoDiceAdapter;
+const normalRequest=async (action,payload)=> {
+    assert.equal(action,'roll');
+    assert.deepEqual(Object.keys(payload).sort(),['critType','formula']);
+    return JSON.parse(JSON.stringify(await library.rollDice(payload.formula,payload.critType)));
 };
 (async () => {
-    assert.deepEqual(await formulas(0,{bonus:'',rolltype:0}), ['2d6+4']);
-    assert.deepEqual(await formulas(0,{bonus:'',rolltype:1}), ['4d6+4']);
-    assert.deepEqual(await formulas(1,{bonus:'',rolltype:1}), ['2d6+12+4']);
-    assert.deepEqual(await formulas(0,{bonus:'+1d4',rolltype:1}), ['4d6+4+2d4']);
-    await assert.rejects(() => formulas(0,{bonus:'invalid',rolltype:0}));
-    const Adapter = context.GoDiceAdapter;
-    let batches = 0;
-    const actions = [];
-    Adapter.request = async (action, payload) => {
-        actions.push(action);
-        if (action === 'damage') return prepare(payload.formulas, payload.critType);
-        if (action === 'bonus') return {bonus:'+1d4'};
-        batches++;
-        return payload.groups.map(g => Array(g.amount).fill(g.faces));
-    };
-    choice = {bonus:'',rolltype:1};
-    const damage = new context.Roll('2d6+4');
+    const utilsSource=fs.readFileSync('src/dndbeyond/base/utils.js','utf8');
+    const propertiesContext=vm.createContext({});
+    vm.runInContext(utilsSource.slice(utilsSource.indexOf('function propertyListToDict('),
+        utilsSource.indexOf('function descriptionToString(')),propertiesContext);
+    for (const [text,aria,expected] of [
+        ['Slashing Slashing','slashing damage','Slashing'],
+        ['Piercing Piercing',undefined,'Piercing'],
+        ['SlashingSlashing','slashing damage','Slashing'],
+        ['Custom damage',undefined,'Custom damage']
+    ]) {
+        const label={length:1,text:()=> 'Damage Type:'};
+        const value={length:1,text:()=>text,find:()=>({first:()=>({attr:()=>aria})})};
+        const prop={find:selector=>selector.includes('property-label') ? label : value};
+        const result=propertiesContext.propertyListToDict({length:1,eq:()=>prop});
+        assert.equal(result['Damage Type'],expected);
+    }
+    Adapter.request=normalRequest;
+    choice={bonus:'',rolltype:1,advdis:0,elven:false};
+    const damage=new context.Roll('2d6+4');
     damage.setRollType('damage');
-    await new Adapter('Damage',[damage],{}).roll();
-    assert.equal(damage.total,28);
+    const damageRequest={};
+    const originalDamage=damage;
+    await new Adapter('Damage',[damage],damageRequest).roll();
+    assert.equal(damage,originalDamage);
     assert.equal(damage.dice[0].amount,4);
-    assert.equal(batches,1);
-    context.dndbeyondDiceRoller._settings['critical-homebrew'] = 1;
-    const perfect = new context.Roll('2d6+4'); perfect.setRollType('damage');
+    assert.equal(damage.total,20); // Four generated fallback values of 4, plus 4.
+    assert.equal(damageRequest.godiceDamageHandled,true);
+    context.dndbeyondDiceRoller._settings['critical-homebrew']=1;
+    const perfect=new context.Roll('2d6+4'); perfect.setRollType('damage');
     await new Adapter('Damage',[perfect],{}).roll();
-    assert.equal(perfect.total,28);
+    assert.equal(perfect.total,24);
     assert.equal(perfect.dice[0].amount,2);
-    context.dndbeyondDiceRoller._settings['critical-homebrew'] = 4;
-    await assert.rejects(() => new Adapter('Damage',[perfect],{}).roll(), /not supported/);
-    const attack = new context.Roll('2d20kh1+5');
-    attack.setRollType('to-hit');
-    await new Adapter('Attack',[attack],{}).roll();
-    assert.equal(attack.total,29);
-    assert.deepEqual(actions.slice(-2), ['bonus','batch']);
-    let finishBatch;
-    Adapter.request = async action => action === 'bonus' ? {bonus:''} : new Promise(resolve => {finishBatch = resolve;});
-    const waiting = new context.Roll('1d20+5');
-    let completed = false;
-    const pending = new Adapter('Attack',[waiting],{}).roll().then(() => {completed = true;});
-    await new Promise(resolve => setImmediate(resolve));
+    context.dndbeyondDiceRoller._settings['critical-homebrew']=4;
+    await assert.rejects(()=>new Adapter('Damage',[perfect],{}).roll(),/not supported/);
+    context.dndbeyondDiceRoller._settings['critical-homebrew']=0;
+    choice={bonus:'+1d4',rolltype:0,advdis:1,elven:false};
+    entered=[20,3,2];
+    const attack=new context.Roll('1d20+5'); attack.setRollType('to-hit');
+    attack.setCriticalLimit(19);
+    const attackRequest={advantage:0};
+    await new Adapter('Attack',[attack],attackRequest).roll();
+    assert.equal(attack.total,27);
+    assert.equal(attackRequest.advantage,3);
+    assert.equal(attack.dice[0].amount,2);
+    assert.equal(attack.dice[0].rolls.filter(value=>!value.discarded).length,1);
+    assert.equal(attack.isCriticalHit(),true);
+    choice={bonus:'',rolltype:0,advdis:1,elven:true};
+    entered=[2,17,8];
+    const elven=new context.Roll('1d20+6'); elven.setRollType('to-hit');
+    await new Adapter('Elven accuracy',[elven],{}).roll();
+    assert.equal(elven.total,23);
+    assert.equal(elven.dice[0].amount,3);
+    choice={bonus:'',rolltype:0,advdis:-1,elven:false};
+    entered=[18,4];
+    const disadvantage=new context.Roll('1d20+6'); disadvantage.setRollType('to-hit');
+    await new Adapter('Disadvantage',[disadvantage],{advantage:4}).roll();
+    assert.equal(disadvantage.total,10);
+    choice={bonus:'',rolltype:0,advdis:1,elven:false};
+    entered=[3,4];
+    const minimum=new context.Roll('1d20min10+6'); minimum.setRollType('skill-check');
+    await new Adapter('Minimum',[minimum],{}).roll();
+    assert.equal(minimum.total,16,'retain minimum modifiers when adding advantage');
+    choice={bonus:'',rolltype:0,advdis:0,elven:false};
+    entered=[1,4,5];
+    const reroll=new context.Roll('2d6r<2min3'); reroll.setRollType('damage');
+    await new Adapter('Reroll',[reroll],{}).roll();
+    assert.equal(reroll.total,9);
+    assert.equal(reroll.dice[0].rolls[0].discarded,true);
+    const repeated=new context.Roll('1d6+1d6+4'); repeated.setRollType('damage');
+    entered=[2,5];
+    await new Adapter('Repeated terms',[repeated],{}).roll();
+    assert.equal(repeated.total,11);
+    assert.equal(repeated.dice[0].rolls[0].roll,2);
+    assert.equal(repeated.dice[1].rolls[0].roll,5);
+    entered=[NaN,1];
+    const partial=new context.Roll('2d6-2'); partial.setRollType('damage');
+    await new Adapter('Partial values',[partial],{}).roll();
+    assert.equal(partial.total,3,'generated 4 plus supplied 1 minus 2');
+    vm.runInContext(fs.readFileSync('src/common/roll_renderer.js','utf8') + '\nthis.Renderer=Beyond20RollRenderer;',context);
+    context.RollType={NORMAL:0,DOUBLE:1,THRICE:2,ADVANTAGE:3,DISADVANTAGE:4,SUPER_ADVANTAGE:6,SUPER_DISADVANTAGE:7};
+    const coreRoller={handlesAdvantage:true,roll:formula=>new context.Roll(formula)};
+    const coreRenderer=new context.Renderer(coreRoller,{},{});
+    const one=coreRenderer.getToHit({advantage:3},'+6').rolls;
+    assert.equal(one.length,1);
+    coreRenderer.processToHitAdvantage(3,one);
+    assert.equal(coreRenderer.getToHit({advantage:1},'+6').rolls.length,2);
+    coreRoller.handlesAdvantage=false;
+    assert.equal(coreRenderer.getToHit({advantage:3},'+6').rolls.length,2,'non-GoDice backends retain advantage branches');
+    let finishRoll;
+    Adapter.request=async()=>new Promise(resolve=>{finishRoll=resolve;});
+    const waiting=new context.Roll('1d20+5');
+    let completed=false;
+    const pending=new Adapter('Attack',[waiting],{}).roll().then(()=>{completed=true;});
+    await new Promise(resolve=>setImmediate(resolve));
     assert.equal(completed,false);
-    finishBatch([[12]]);
+    finishRoll({notation:'1d20+5',rolls:[{rolls:[{initialValue:12,value:12}]}]});
     await pending;
     assert.equal(waiting.total,17);
-    assert.equal(attack.dice[0].rolls.filter(r => !r.discarded).length,1);
-    Adapter.request = async () => [[0]];
-    await assert.rejects(() => Adapter.collect([{amount:1,faces:6}]), /Invalid/);
+    assert.throws(()=>Adapter.fromResult({notation:'1d6',rolls:[{rolls:[{value:0}]}]}),/Invalid/);
+    assert.equal(Adapter.fromResult({notation:'1d6',rolls:[{rolls:[{value:4}]}]}).dice[0].rolls[0].roll,4,
+        'accept the public value field when initialValue is absent');
+    assert.equal(Adapter.libraryFormula(new context.Roll('2d6r<2min3+4')),'2d6+4');
+    assert.throws(()=>Adapter.libraryFormula(new context.Roll('1d6+0.5')),/fractional/);
+    const dropped=new context.Roll('3d6dl1'); dropped.setRollType('damage');
+    Adapter.request=normalRequest;
+    entered=[1,3,5];
+    await new Adapter('Drop lowest',[dropped],{}).roll();
+    assert.equal(dropped.total,8,'Beyond20 restores drop modifiers outside the unchanged library');
+    Adapter.request=normalRequest;
+    choice={bonus:'',rolltype:0,advdis:0,elven:false};
+    coreRoller.handlesAdvantage=true;
+    coreRoller.resolveRolls=(name,rolls,request)=>new Adapter(name,rolls,request).roll();
+    coreRenderer.setSettings({'use-godice':true,'critical-homebrew':0});
+    choice={bonus:'',rolltype:0,advdis:1,elven:false};
+    entered=[19,2];
+    const [coreHits]=await coreRenderer.buildAttackRolls({name:'Sword',rollAttack:true,
+        'to-hit':'+6',advantage:3,'critical-limit':19},'');
+    assert.equal(coreHits.length,1);
+    assert.equal(coreHits[0].total,25);
+    assert.equal(coreHits[0].isCriticalHit(),true);
+    choice={bonus:'',rolltype:1,advdis:0,elven:false};
+    entered=[];
+    const beforeDamagePrompts=dicePrompts.length;
+    const [,coreDamages]=await coreRenderer.buildAttackRolls({name:'Sword',rollAttack:false,rollDamage:true,
+        rollCritical:true,advantage:0,damages:['2d6+4'],'damage-types':['Slashing'],
+        'critical-damages':['2d6'],'critical-damage-types':['Slashing']},'');
+    assert.equal(coreDamages.length,1,'critical dice stay in the existing normal damage result');
+    assert.equal(coreDamages[0][1].total,20);
+    assert.equal(dicePrompts.length-beforeDamagePrompts,1,'core renderer must not request a second critical roll');
+    choice={bonus:'',rolltype:0,advdis:0,elven:false};
     // Verify settings normalization without needing a browser DOM.
     const settings = fs.readFileSync('src/common/settings.js','utf8');
     const normalize = settings.slice(settings.indexOf('function normalizeDiceSettings'), settings.indexOf('function setSettings'));
@@ -73,6 +166,18 @@ const formulas = async (rule, options) => {
     context.normalizeDiceSettings(conflicting);
     assert.equal(conflicting['use-digital-dice'],false);
     const character = fs.readFileSync('src/dndbeyond/content-scripts/character.js','utf8');
+    const extraStart=character.indexOf('                const additional_damages =');
+    const extraEnd=character.indexOf('                break;',extraStart);
+    const noteDamage={text:()=> '2d6',find:()=>({attr:()=> 'Fire',text:()=> ''})};
+    for (const useGoDice of [true,false]) {
+        const itemContext=vm.createContext({settings:{'use-godice':useGoDice},$:()=>[],
+            value:{find:()=>({length:1,eq:()=>noteDamage})},
+            damages:['2d6+4'],damage_types:['Slashing'],item_name:'Flame Tongue Greatsword',properties:{},
+            applyGWFIfRequired:(name,properties,formula)=>formula});
+        vm.runInContext(character.slice(extraStart,extraEnd),itemContext);
+        assert.deepEqual(Array.from(itemContext.damages),useGoDice ? ['2d6+4'] : ['2d6+4','2d6']);
+        assert.deepEqual(Array.from(itemContext.damage_types),useGoDice ? ['Slashing'] : ['Slashing','Fire']);
+    }
     const handlers = {};
     const documentHandlers = {};
     const calls = [];
@@ -129,16 +234,6 @@ const formulas = async (rule, options) => {
 
     assert.equal(routing.normalizeDDBDamageFormula('2d6+42d6+4'),'2d6+4');
     assert.equal(routing.normalizeDDBDamageFormula('2d6+4+2d6'),'2d6+4+2d6');
-    context.RollType = {NORMAL:0, ADVANTAGE:3, DISADVANTAGE:4, SUPER_ADVANTAGE:6};
-    Adapter.request = async () => ({bonus:'+1d4',advdis:1,elven:true});
-    const original = {type:'attack',rollAttack:true,'to-hit':'+6',advantage:0};
-    const preparedHit = await Adapter.prepareD20Request(original);
-    assert.equal(preparedHit['to-hit'],'+6+1d4');
-    assert.equal(preparedHit.advantage,6);
-    assert.equal(original['to-hit'],'+6');
-    assert.equal(await Adapter.prepareD20Request(preparedHit),preparedHit);
-    const damageOnly = {type:'attack',rollAttack:false,rollDamage:true};
-    assert.equal(await Adapter.prepareD20Request(damageOnly),damageOnly);
     // Exercise the actual outgoing broker boundary: no native publication,
     // completed physical results allowed, native behavior restored when off.
     const sent = [];
@@ -184,22 +279,26 @@ const formulas = async (rule, options) => {
     const fixedEventTarget = {closest:selector=>selector === '.ddbc-damage, .ct-damage' ? fixedTarget : null};
     for (const type of ['pointerdown','click']) pageHandlers[type]({button:0,target:fixedEventTarget,preventDefault(){},stopPropagation(){},stopImmediatePropagation(){}});
     assert.equal(intents.length,2);
+    let automaticRolls=0;
+    pageContext.window.diceRoller={roll:async()=>{automaticRolls++;return true;}};
+    pageDoc.documentElement.dataset.beyond20GodiceEnabled='true';
+    pageContext.guardAboveVttGoDiceRoller();
+    assert.equal(await pageContext.window.diceRoller.roll(),false);
+    assert.equal(automaticRolls,0,'AboveVTT must not auto-roll while Beyond20 GoDice owns this page');
+    pageDoc.documentElement.dataset.beyond20GodiceEnabled='false';
+    assert.equal(await pageContext.window.diceRoller.roll(),true);
+    assert.equal(automaticRolls,1,'restore AboveVTT behavior when Beyond20 GoDice is disabled');
 
     pageDoc.documentElement.dataset.beyond20GodiceEnabled='false';
     const native = {button:0,target:pageTarget,preventDefault(){throw new Error('Must allow native controls when disabled');}};
     pageHandlers.click(native);
     assert.equal(intents.length,2);
     context.dndbeyondDiceRoller._settings['critical-homebrew']=0;
-    choice = {bonus:'',rolltype:1};
-    const noteActions=[];
-    Adapter.request = async (action,payload) => {
-        noteActions.push(action);
-        if (action === 'damage') return prepare(payload.formulas,payload.critType);
-        return payload.groups.map(g => Array(g.amount).fill(3));
-    };
-    const note = new context.Roll('2d6');
+    choice={bonus:'',rolltype:1,advdis:0,elven:false};
+    entered=[3,3,3,3];
+    Adapter.request=normalRequest;
+    const note=new context.Roll('2d6');
     await new Adapter('Notes',[note],{type:'custom'}).roll();
-    assert.deepEqual(noteActions,['damage','batch']);
     assert.equal(note.dice[0].amount,4);
     assert.equal(note.total,12);
     const replies = [];
@@ -218,6 +317,33 @@ const formulas = async (rule, options) => {
     delete bridgeContext.window.__beyond20PublishGoDice;
     await requestListener({detail:JSON.stringify({id:'missing',action:'publish',rollInfo:{name:'Hit'}})});
     assert.match(replies[1].error,/not ready/);
+    const conflictPrompts=[];
+    bridgeContext.window.alert=message=>conflictPrompts.push(message);
+    bridgeContext.window.EXPERIMENTAL_SETTINGS={godiceRoller:true};
+    await requestListener({detail:JSON.stringify({id:'above-enabled',action:'configure',enabled:true})});
+    assert.match(replies[2].error,/Disable the GoDice option in AboveVTT, then reload/);
+    bridgeContext.window.EXPERIMENTAL_SETTINGS.godiceRoller=false;
+    bridgeContext.window.godice={rollResult:{}};
+    bridgeContext.document.getElementById=()=>null;
+    await requestListener({detail:JSON.stringify({id:'above-disabled',action:'configure',enabled:true})});
+    assert.equal(replies[3].error,undefined,'a loaded but disabled library must not block Beyond20');
+    bridgeContext.window.__beyond20GoDiceConflict=true;
+    await requestListener({detail:JSON.stringify({id:'reload-needed',action:'configure',enabled:true})});
+    assert.match(replies[4].error,/reload/,'a blocked initialization requires a page reload');
+    assert.equal(conflictPrompts.length,1,'show the disable-and-reload prompt once per page');
+    bridgeContext.window.__beyond20GoDiceConflict=false;
+    let publicCalls=0;
+    bridgeContext.window.godice={rollResult:{rollDice:async function(formula,critType) {
+        assert.equal(arguments.length,2,'use only the unmodified two-argument public API');
+        assert.equal(formula,'1d20');
+        assert.equal(critType,0);
+        publicCalls++;
+        return {notation:'1d20+2'};
+    }}};
+    await requestListener({detail:JSON.stringify({id:'isolated-roll',action:'roll',formula:'1d20',critType:0})});
+    assert.equal(replies[5].error,undefined);
+    assert.equal(replies[5].value.notation,'1d20+2');
+    assert.equal(publicCalls,1);
     const output = [];
     const displayContext = vm.createContext({console,
         dndbeyondDiceRoller:{_settings:{'use-godice':true}},
@@ -266,6 +392,27 @@ const formulas = async (rule, options) => {
     physicalBroker._mb.dispatch=message=>physicalDispatches.push(message);
     physicalBroker.postMessage({eventType:'dice/roll/fulfilled',data:{__b20Override__:true}},{physical:true});
     assert.equal(physicalDispatches.length,2,'standalone DDB still works without AboveVTT');
+    // AboveVTT can instantiate DiceRoller twice after Beyond20 registers.
+    const transportMessages=[];
+    const transport={gameId:'campaign',userId:'user',subscribe(){},dispatch:message=>transportMessages.push(message)};
+    brokerContext.window[Symbol.for('@dndbeyond/message-broker-lib')]=transport;
+    const earlyBroker=new brokerContext.Broker();
+    earlyBroker.register();
+    const firstSaved=transport.dispatch;
+    transport.dispatch=()=>{throw new Error('First AboveVTT roll queue must not receive physical values');};
+    const secondSaved=transport.dispatch;
+    brokerContext.window.diceRoller={ddbDispatch:secondSaved,ddbonmessage(){}};
+    transport.dispatch=()=>{throw new Error('Second AboveVTT roll queue must not receive physical values');};
+    for (const eventType of ['dice/roll/pending','dice/roll/fulfilled'])
+        earlyBroker.postMessage({eventType,data:{__b20Override__:true}},{physical:true});
+    assert.deepEqual(transportMessages.map(message=>message.eventType),['dice/roll/pending','dice/roll/fulfilled']);
+    // Registration after the first wrapper uses its saved transport, too.
+    brokerContext.window.diceRoller.ddbDispatch=firstSaved;
+    const lateBroker=new brokerContext.Broker();
+    lateBroker.register();
+    lateBroker.postMessage({eventType:'dice/roll/fulfilled',data:{__b20Override__:true}},{physical:true});
+    assert.equal(transportMessages.length,3);
+    delete brokerContext.window.diceRoller;
     let fixedRequests=0;
     Adapter.request = async () => {fixedRequests++;throw new Error('Fixed damage must not open a popup');};
     const fixed = new context.Roll('5');
@@ -317,11 +464,48 @@ const formulas = async (rule, options) => {
     assert.equal(await chatContext.publishGoDiceChatCard(brandedInfo,brandedRolls),false);
     chatContext.window.MB={inject_chat:async data=>sharedCards.push(data)};
     chatContext.b20BuildDdbRollsForGameLog = ()=>brandedRolls;
-    chatContext.messageBroker={register(){throw new Error('Do not duplicate an HTML card with a native dice message');}};
+    chatContext.messageBroker={register(){},_mb:{},postMessage(){throw new Error('Do not duplicate an HTML card with a native dice message');}};
     const brokerPage = fs.readFileSync('src/dndbeyond/page-scripts/message-broker.js','utf8');
+    const labelsContext=vm.createContext({});
+    vm.runInContext(brokerPage.slice(brokerPage.indexOf('    function rollToDDBRoll('),
+        brokerPage.indexOf('    function combineD20Rolls(')),labelsContext);
+    const labelRoll={type:'damage',formula:'2d6+4',parts:[4],total:11};
+    const labelInfo={name:'Flame Tongue Greatsword',rolls:[labelRoll],request:{godice:true,type:'attack','damage-types':['Slashing']}};
+    const labelRolls=labelsContext.b20BuildDdbRollsForGameLog([labelRoll],labelInfo.request);
+    assert.equal(labelRolls[0].rollType,'damage');
+    const nativeAdvantage=labelsContext.b20BuildDdbRollsForGameLog([attack.toJSON()],{godice:true,advantage:3})[0];
+    assert.equal(nativeAdvantage.rollKind,'advantage');
+    assert.equal(nativeAdvantage.result.total,27);
+    assert.equal(nativeAdvantage.diceNotation.set[0].count,2);
+    assert.equal(nativeAdvantage.result.values.length,3,'include both d20s and bonus die in the breakdown');
+    const labelCard=chatContext.buildGoDiceChatCard(labelInfo,labelRolls,'');
+    assert.match(labelCard,/>Slashing damage<\/div>/);
+    assert.match(labelCard,/color:#f16b6b/);
+    assert.match(labelCard,/>Flame Tongue Greatsword<\/div>/);
+    assert.equal(chatContext.getGoDiceRollTitle({...labelInfo,rolls:[{type:'to-hit'}]}),'Flame Tongue Greatsword');
+    assert.doesNotMatch(labelCard,/Slashing Slashing/i);
+    labelInfo.request['damage-types']=['Piercing Piercing'];
+    assert.equal(labelsContext.b20BuildDdbRollsForGameLog([labelRoll],labelInfo.request)[0].rollType,'damage');
     vm.runInContext(brokerPage.slice(brokerPage.indexOf('    async function fulfilledRoll'),brokerPage.indexOf('    window.__beyond20PublishGoDice')),chatContext);
     await chatContext.fulfilledRoll(brandedInfo);
     assert.equal(sharedCards.length,3);
+    const chatTransports=[];
+    const injectedCards=[];
+    chatContext.uuidv4=()=>'chat-id';
+    chatContext.window.MB={userid:'user',gameid:'campaign',
+        inject_chat(){throw new Error('Do not use AboveVTT wrapped dispatch');},
+        handle_injected_data:message=>injectedCards.push(message)};
+    chatContext.messageBroker.postMessage=(message,options)=>{
+        chatTransports.push({message,options});
+        return {...message,id:'envelope-id'};
+    };
+    await chatContext.fulfilledRoll(brandedInfo);
+    assert.equal(chatTransports.length,1,'one shared placeholder, without a duplicate native roll');
+    assert.equal(chatTransports[0].options.physical,true);
+    assert.equal(chatTransports[0].message.data.injected_data.beyond20GoDice,true);
+    assert.match(chatTransports[0].message.data.rolls[0].rollType,/^beyond20-godice-/);
+    assert.equal(injectedCards[0].id,'envelope-id');
+    assert.match(injectedCards[0].data.injected_data.text,/Rolled with GoDice/);
     brokerContext.document.documentElement.dataset.beyond20GodiceEnabled='true';
     const beforeInjected=sent.length;
     broker._onDispatchMessage({eventType:'dice/roll/pending',data:{injected_data:{beyond20GoDice:true}}});
@@ -337,9 +521,29 @@ const formulas = async (rule, options) => {
     await chatContext.fulfilledRoll(brandedInfo);
     assert.equal(nativeMessages[0].data.setId,'06002');
     assert.equal('imageUrl' in nativeMessages[0].data,false);
+    assert.equal(nativeMessages.length,2);
+    assert.equal(nativeMessages[0].eventType,'dice/roll/pending');
+    assert.equal(nativeMessages[1].eventType,'dice/roll/fulfilled');
+    assert.equal(nativeMessages[0].persist,false);
+    assert.equal(nativeMessages[1].persist,true);
+    assert.equal(nativeMessages[0].data.rollId,nativeMessages[1].data.rollId);
+    assert.equal('result' in nativeMessages[0].data.rolls[0],false);
+    assert.equal(nativeMessages[1].data.rolls[0].result.total,9);
     delete chatContext.window.mydice;
     await chatContext.fulfilledRoll(brandedInfo);
-    assert.equal('setId' in nativeMessages[1].data,false);
+    assert.equal('setId' in nativeMessages[2].data,false);
+    assert.equal('setId' in nativeMessages[3].data,false);
+    brandedInfo.request.type='attack';
+    brandedInfo.name='Slashing';
+    await chatContext.fulfilledRoll(brandedInfo);
+    assert.equal(nativeMessages[5].data.rolls[0].rollType,'Slashing');
+    assert.equal(nativeMessages[5].data.action,'Slashing');
+    brandedInfo.name='Flame Tongue Greatsword';
+    await chatContext.fulfilledRoll(brandedInfo);
+    assert.equal(nativeMessages[7].data.rolls[0].rollType,'Slashing');
+    brandedInfo.request['damage-types']=['Slashing'];
+    await chatContext.fulfilledRoll(brandedInfo);
+    assert.equal(nativeMessages[9].data.action,'Flame Tongue Greatsword\nSlashing');
     let configCalls=0;
     let settingsNow=1000;
     const settingsWarnings=[];
@@ -376,5 +580,5 @@ const formulas = async (rule, options) => {
     assert.equal(configCalls,3,'failed requests have a short retry cooldown');
     assert.equal(settingsWarnings.length,1);
     assert.equal(settingsWarnings[0].includes('test-session-token'),false);
-    console.log('PASS GoDice critical formulas, bonus dice, one damage batch, roll objects, advantage, unsupported rule, validation, settings');
+    console.log('PASS GoDice critical formulas, bonus dice, normal resolver fallback, roll objects, advantage, unsupported rule, validation, settings');
 })().catch(error => { console.error(error); process.exitCode = 1; });

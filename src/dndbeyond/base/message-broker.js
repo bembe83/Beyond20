@@ -2,6 +2,7 @@ class DDBMessageBroker {
     constructor() {
         this._mb = null;
         this._mbDispatch = null;
+        this._physicalDispatch = null;
         this._messageQueue = [];
         this._blockMessages = [];
         this._registered = false;
@@ -25,6 +26,11 @@ class DDBMessageBroker {
         this._onDispatchBound = this._onDispatchBound || this._onDispatchMessage.bind(this);
 
         this._mb.subscribe(this._onMessageBound);
+        // Capture the transport before later AboveVTT DiceRoller instances
+        // wrap dispatch again. Their latest ddbDispatch may be another wrapper.
+        this._physicalDispatch = typeof window.diceRoller?.ddbDispatch === 'function'
+            ? window.diceRoller.ddbDispatch.bind(window.diceRoller)
+            : this._mb.dispatch.bind(this._mb);
         this._mbDispatch = this._mb.dispatch.bind(this._mb);
         this._mb.dispatch = this._onDispatchBound;
         this._registered = true;
@@ -36,6 +42,7 @@ class DDBMessageBroker {
         if (this._mbDispatch) {
             this._mb.dispatch = this._mbDispatch;
             this._mbDispatch = null;
+            this._physicalDispatch = null;
         }
 
         // We still can't unsubscribe from _onMessage
@@ -210,10 +217,11 @@ class DDBMessageBroker {
 
         data.userId = data.userId || this._mb.userId;
         const message = this._cleanupPostData(data);
-        // AboveVTT drops standalone fulfilled messages in its native-roll
-        // wrapper. Its saved dispatcher accepts completed physical results.
-        if (physical && typeof window.diceRoller?.ddbDispatch === 'function') {
-            window.diceRoller.ddbDispatch(message);
+        // Physical values bypass AboveVTT's native-roll queues, including
+        // wrappers installed by a second DiceRoller after our registration.
+        const physicalDispatch = this._physicalDispatch || window.diceRoller?.ddbDispatch?.bind(window.diceRoller);
+        if (physical && physicalDispatch) {
+            physicalDispatch(message);
             if (typeof window.diceRoller.ddbonmessage === 'function')
                 window.diceRoller.ddbonmessage({data: JSON.stringify(message)});
         } else this._mb.dispatch(message);

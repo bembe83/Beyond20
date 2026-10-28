@@ -7,23 +7,6 @@ class GoDice {
         this.rolls = rolls;
         this.request = request;
     }
-    // Advantage must be chosen before Beyond20 creates its d20 branches.
-    static async prepareD20Request(original) {
-        if (original.godiceBonusPrepared) return original;
-        const types = ['skill', 'ability', 'saving-throw', 'initiative', 'death-save'];
-        const attack = ['attack', 'spell-attack'].includes(original.type) && original.rollAttack !== false && original['to-hit'] !== undefined;
-        if (!attack && !types.includes(original.type)) return original;
-        const request = {...original};
-        const key = attack ? 'to-hit' : request.type === 'initiative' ? 'initiative' : 'modifier';
-        const modifier = String(request[key] || '0');
-        const choice = await this.request('bonus', {formula: '1d20' + (/^[+-]/.test(modifier) ? modifier : '+' + modifier), d20:true, advantage:request.advantage});
-        const bonus = String(choice.bonus || '').replace(/\s+/g, '');
-        if (bonus && !/^[+-]?(?:\d*d(?:4|6|8|10|12|20|100)|\d+)(?:[+-](?:\d*d(?:4|6|8|10|12|20|100)|\d+))*$/i.test(bonus)) throw new Error('Invalid bonus. Use +2 or +1d4.');
-        request[key] = modifier + (bonus ? (/^[+-]/.test(bonus) ? bonus : '+' + bonus) : '');
-        request.advantage = Number(choice.advdis) > 0 ? (choice.elven ? RollType.SUPER_ADVANTAGE : RollType.ADVANTAGE) : Number(choice.advdis) < 0 ? RollType.DISADVANTAGE : RollType.NORMAL;
-        request.godiceBonusPrepared = true;
-        return request;
-    }
     static load() {
         if (!this.loading) this.loading = new Promise((resolve, reject) => {
             const script = document.createElement('script');
@@ -53,79 +36,91 @@ class GoDice {
             document.dispatchEvent(new CustomEvent('Beyond20_GoDiceRequest', {detail: JSON.stringify({id, action, ...payload})}));
         });
     }
-    static async collect(dice) {
-        const groups = dice.map(d => ({amount: d.amount, faces: d.faces}));
-        if (!groups.length) return [];
-        if (groups.some(g => ![4,6,8,10,12,20,100].includes(g.faces))) throw new Error('Unsupported GoDice die type.');
-        const batches = await this.request('batch', {groups});
-        if (!Array.isArray(batches) || batches.length !== groups.length) throw new Error('Incomplete GoDice results.');
-        return batches.map((values, i) => {
-            const {amount, faces} = groups[i];
-            if (!Array.isArray(values) || values.length !== amount || values.some(v => !Number.isInteger(v) || v < 1 || v > faces))
-                throw new Error('Invalid GoDice results.');
-            return values.map(roll => ({roll}));
-        });
-    }
     roll() {
         const result = GoDice.queue.then(() => this.resolve());
         GoDice.queue = result.catch(() => {});
         return result;
     }
+    static libraryModifier(die) {
+        const keep = die._modifiers.match(/k[hl](\d*)/);
+        return keep && Number(keep[1] || 1) <= 9 ? keep[0] : '';
+    }
+    static libraryFormula(roll) {
+        return roll.parts.map(part => {
+            if (typeof part === 'number' && !Number.isInteger(part))
+                throw new Error('The GoDice library does not support fractional constants in dice formulas.');
+            if (!(part instanceof DNDBDice)) return String(part);
+            if (part.amount > 100 || ![4,6,8,10,12,20,100].includes(part.faces))
+                throw new Error('Unsupported GoDice dice request.');
+            return part.amount + 'd' + part.faces + GoDice.libraryModifier(part);
+        }).join('').replace(/\s+/g, '');
+    }
+    static fromResult(result, original = null) {
+        if (!result || typeof result.notation !== 'string' || !Array.isArray(result.rolls))
+            throw new Error('Invalid GoDice roll result.');
+        const parsed = new DNDBRoll(result.notation);
+        const groups = result.rolls.filter(part => part && Array.isArray(part.rolls));
+        // The library has already handled its bonus, advantage and critical
+        // choices. Restore only suffixes its parser cannot understand.
+        let index = 0;
+        const formula = parsed.parts.map(part => {
+            if (!(part instanceof DNDBDice)) return String(part);
+            const source = original?.dice[index++];
+            if (source && source.faces !== part.faces) throw new Error('GoDice changed the original dice order.');
+            const extra = source ? source._modifiers.replace(GoDice.libraryModifier(source), '') : '';
+            return part.formula + extra;
+        }).join(' ');
+        const replacement = new DNDBRoll(formula);
+        if (replacement.dice.length !== groups.length || original && replacement.dice.length < original.dice.length)
+            throw new Error('Incomplete GoDice results.');
+        replacement.dice.forEach((die, position) => {
+            const values = groups[position].rolls.map(value => value.initialValue ?? value.value);
+            if (values.length !== die.amount || die.amount > 100 || values.some(value =>
+                !Number.isInteger(value) || value < 1 || value > die.faces)) throw new Error('Invalid GoDice results.');
+            // Apply Beyond20's modifier flags once, using the original values.
+            die._rolls = values.map(roll => ({roll}));
+        });
+        return replacement;
+    }
     async resolve() {
-        if (!this.rolls.length) return;
-        if (this.rolls.every(roll => roll.dice.length === 0)) {
-            // Fixed damage needs neither a GoDice choice nor physical values.
-            this.rolls.forEach(roll => roll.calculateTotal());
-            if (this.rolls.some(roll => roll._roll_type === 'damage')) this.request.godiceDamageHandled = true;
-            return;
-        }
-        const damageCustom = this.request.type === 'custom' && this.rolls.some(r => r.dice.length) && !this.rolls.some(r => r.dice.some(d => d.faces === 20));
-        if (damageCustom && this.request.godiceNoteDamageType) this.rolls.forEach(roll => roll.setRollType('damage'));
-        const damages = this.rolls.filter(r => r._roll_type === 'damage' || damageCustom);
-        if (damages.length) {
+        const damageCustom = this.request.type === 'custom' && !this.rolls.some(roll => roll.dice.some(die => die.faces === 20));
+        const d20Rolls = this.rolls.filter(roll => roll._roll_type !== 'damage' && roll.dice.some(die => die.faces === 20));
+        for (const roll of this.rolls) {
+            const damage = roll._roll_type === 'damage' || damageCustom;
+            if (damageCustom && this.request.godiceNoteDamageType) roll.setRollType('damage');
+            if (damage) this.request.godiceDamageHandled = true;
+            if (!roll.dice.length) { roll.calculateTotal(); continue; }
             const rule = Number(dndbeyondDiceRoller._settings['critical-homebrew'] || 0);
-            if (![CriticalRules.PHB, CriticalRules.HOMEBREW_MAX].includes(rule))
+            if (damage && ![CriticalRules.PHB, CriticalRules.HOMEBREW_MAX].includes(rule))
                 throw new Error('GoDice supports Standard PHB and Perfect rolls critical rules. Reroll all damages is not supported.');
-            const prepared = await GoDice.request('damage', {formulas: damages.map(r => r.formula), critType: rule === CriticalRules.HOMEBREW_MAX ? 1 : 0});
-            if (!Array.isArray(prepared.formulas) || prepared.formulas.length !== damages.length) throw new Error('Invalid GoDice damage formulas.');
-            this.request.godiceDamageHandled = true;
-            damages.forEach((roll, i) => {
-                const replacement = new DNDBRoll(prepared.formulas[i]);
-                roll._parts = replacement.parts;
-                roll._formula = replacement.formula;
+            const result = await GoDice.request('roll', {
+                formula:GoDice.libraryFormula(roll), critType:damage && rule === CriticalRules.HOMEBREW_MAX ? 1 : 0
             });
-        }
-        const otherRolls = this.rolls.filter(r => !damages.includes(r) && r.dice.length);
-        if (otherRolls.length && !this.request.godiceBonusPrepared) {
-            const choice = await GoDice.request('bonus', {
-                formula: otherRolls[0].formula,
-                d20: otherRolls.some(r => r.dice.some(d => d.faces === 20)),
-                advantage: this.request.advantage,
-                lockAdvantage: true
-            });
-            const bonus = String(choice.bonus || '').replace(/\s+/g, '');
-            if (bonus && !/^[+-]?(?:\d*d(?:4|6|8|10|12|20|100)|\d+)(?:[+-](?:\d*d(?:4|6|8|10|12|20|100)|\d+))*$/i.test(bonus))
-                throw new Error('Invalid bonus. Use +2 or +1d4.');
-            if (bonus) for (const roll of otherRolls) {
-                const replacement = new DNDBRoll(roll.formula + (/^[+-]/.test(bonus) ? bonus : '+' + bonus));
-                roll._parts = replacement.parts;
-                roll._formula = replacement.formula;
+            const replacement = GoDice.fromResult(result, roll);
+            // Keep Beyond20's modifier semantics, including one-time rerolls.
+            // Reroll values use the same public API and its normal prompts.
+            for (const die of replacement.dice) {
+                const reroll = die.rerollDice;
+                try {
+                    die.rerollDice = async amount => {
+                        const extra = GoDice.fromResult(await GoDice.request('roll', {
+                            formula:amount + 'd' + die.faces, critType:0
+                        }));
+                        if (extra.formula.replace(/\s+/g, '') !== amount + 'd' + die.faces)
+                            throw new Error('Keep the original formula in the GoDice reroll prompt, without bonuses or critical damage.');
+                        die._rolls.push(...extra.dice[0].rolls);
+                    };
+                    await die.handleModifiers();
+                } finally { die.rerollDice = reroll; }
+            }
+            roll._parts = replacement.parts;
+            roll._formula = replacement.formula;
+            roll.calculateTotal();
+            if (d20Rolls.length === 1 && d20Rolls[0] === roll) {
+                const d20 = roll.dice.find(die => die.faces === 20);
+                this.request.advantage = /kh/.test(d20._modifiers) ? (d20.amount === 3 ? 6 : 3)
+                    : /kl/.test(d20._modifiers) ? (d20.amount === 3 ? 7 : 4) : 0;
             }
         }
-        const dice = this.rolls.flatMap(r => r.dice);
-        const batches = await GoDice.collect(dice);
-        for (let i = 0; i < dice.length; i++) {
-            const die = dice[i];
-            const reroll = die.rerollDice;
-            die._rolls = batches[i];
-            try {
-                die.rerollDice = async amount => {
-                    const [values] = await GoDice.collect([{amount, faces: die.faces}]);
-                    die._rolls.push(...values);
-                };
-                await die.handleModifiers();
-            } finally { die.rerollDice = reroll; }
-        }
-        this.rolls.forEach(r => r.calculateTotal());
     }
 }

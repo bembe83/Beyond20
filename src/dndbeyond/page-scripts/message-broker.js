@@ -105,6 +105,7 @@ if (!window.__beyond20_mb2_initialized__) {
         const rollToKind = {
             "critical-damage": "critical hit"
         };
+        const compoundD20 = (roll.parts || []).find(part => part?.faces === 20 && /k[hl]/.test(part.modifiers || ''));
 
         const rollToType = {
             "to-hit": "to hit",
@@ -128,7 +129,7 @@ if (!window.__beyond20_mb2_initialized__) {
                 set: sets
             },
             diceNotationStr: roll.formula,
-            rollKind: rollToKind[roll.type] || "",
+            rollKind: compoundD20 ? (/kh/.test(compoundD20.modifiers) ? 'advantage' : 'disadvantage') : rollToKind[roll.type] || "",
             rollType: rollType
         };
 
@@ -145,7 +146,8 @@ if (!window.__beyond20_mb2_initialized__) {
                     return rolls.length ? rolls.join("+") : String(p.total);
                 }).join(""),
                 total: parseInt(roll.total, 10),
-                values: results
+                values: compoundD20 ? (roll.parts || []).flatMap(part =>
+                    (part?.rolls || []).filter(value => part.faces === 20 || !value.discarded).map(value => value.roll)) : results
             };
         }
 
@@ -164,12 +166,12 @@ if (!window.__beyond20_mb2_initialized__) {
         
         const damageTypes = request["damage-types"] || [];
 
-        if (!isAdvantage && !isDisadvantage && !isSuperAdvantage && !isSuperDisadvantage) {
+        if (request.godice || (!isAdvantage && !isDisadvantage && !isSuperAdvantage && !isSuperDisadvantage)) {
             let damageTypeIndex = 0;
             return rolls.map((r) => {
                 const isDamageRoll = r.type === "damage" || r.type === "critical-damage";
                 const dt = isDamageRoll ? damageTypes[damageTypeIndex++] : null;
-                return rollToDDBRoll(r, true, dt);
+                return rollToDDBRoll(r, true, request.godice ? null : dt);
             });
         }
 
@@ -185,7 +187,7 @@ if (!window.__beyond20_mb2_initialized__) {
             ...otherRolls.map((r) => {
                 const isDamageRoll = r.type === "damage" || r.type === "critical-damage";
                 const dt = isDamageRoll ? damageTypes[damageTypeIndex++] : null;
-                return rollToDDBRoll(r, true, dt);
+                return rollToDDBRoll(r, true, request.godice ? null : dt);
             })
         ];
     }
@@ -488,27 +490,39 @@ if (!window.__beyond20_mb2_initialized__) {
         if (rollData.request?.godice) {
             if (!Array.isArray(rollData.rolls) || !rollData.rolls.length) return;
             const converted = b20BuildDdbRollsForGameLog(rollData.rolls, rollData.request);
-            if (await publishGoDiceChatCard(rollData, converted)) return;
             messageBroker.register();
             if (!messageBroker._mb) throw new Error('D&D Beyond game log is not ready.');
+            if (await publishGoDiceChatCard(rollData, converted,
+                (message, options) => messageBroker.postMessage(message, options))) return;
             const context = messageBroker.getContext(rollData.request.character);
             if (rollData.request.whisper === 1) {
                 context.messageScope = 'userId';
                 context.messageTarget = messageBroker._mb.userId;
             }
             const setId = await resolveGoDiceSetId();
-            messageBroker.postMessage({
+            const action = getGoDiceRollTitle({...rollData, name:normalizeActionName(rollData.name)});
+            const fulfilled = {
                 eventType: 'dice/roll/fulfilled', source: 'web', persist: true,
                 messageScope: context.messageScope, messageTarget: context.messageTarget,
                 data: {
-                    action: normalizeActionName(rollData.name).split(/\s+/).map((word, index) =>
+                    action: action.split('\n').map(line => line.split(/\s+/).map((word, index) =>
                         (index > 0 && index % 3 === 0 ? '\n' : index > 0 ? ' ' : '') + word
-                    ).join(''), context,
+                    ).join('')).join('\n'), context,
                     ...(setId ? {setId} : {}),
                     rollId: uuidv4(), rolls: converted,
                     [B20_OVERRIDE_MARKER]: true
                 }
+            };
+            // Create the native log entry before completing it. Both messages
+            // bypass AboveVTT's roll queue: the physical dice are already done.
+            messageBroker.postMessage({
+                ...fulfilled, eventType: 'dice/roll/pending', persist: false,
+                data: {...fulfilled.data, rolls: converted.map(roll => {
+                    const {result, ...pending} = roll;
+                    return pending;
+                })}
             }, {physical: true});
+            messageBroker.postMessage(fulfilled, {physical: true});
             return;
         }
         if (!b20OverrideQueue.length) return;

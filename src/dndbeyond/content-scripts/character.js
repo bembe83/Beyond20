@@ -1258,7 +1258,9 @@ async function rollItem(force_display = false, force_to_hit_only = false, force_
                     damages.push(damage);
                     damage_types.push(damage_type);
                 }
-                const additional_damages = value.find(".ct-item-detail__additional-damage,.ddbc-item-detail__additional-damage");
+                // Conditional item/Notes damage is rolled separately with GoDice
+                // so the DM can apply each damage type independently.
+                const additional_damages = settings['use-godice'] ? $() : value.find(".ct-item-detail__additional-damage,.ddbc-item-detail__additional-damage");
                 for (let j = 0; j < additional_damages.length; j++) {
                     let dmg = additional_damages.eq(j).text();
                     let dmg_type = additional_damages.eq(j).find(".ct-damage-type-icon .ct-tooltip,.ddbc-damage-type-icon .ddbc-tooltip").attr("data-original-title");

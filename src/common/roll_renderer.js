@@ -147,6 +147,13 @@ class Beyond20RollRenderer {
 
         const d20 = request.d20 || "1d20";
         let rolls = [];
+        // GoDice's normal resolver chooses advantage in its own prompt and
+        // returns a compound roll. Keep separate branches for Roll Twice/Thrice.
+        if (this._roller.handlesAdvantage && ![RollType.DOUBLE, RollType.THRICE].includes(advantage)) {
+            const roll = this.createRoll(d20 + modifier, data, type);
+            roll.setCriticalFaces(20);
+            return {rolls:[roll]};
+        }
         if ([RollType.DOUBLE, RollType.ADVANTAGE, RollType.DISADVANTAGE].includes(advantage)) {
             const roll_1 = this.createRoll(d20 + modifier, data, type);
             const roll_2 = this.createRoll(d20 + modifier, data, type);
@@ -167,6 +174,7 @@ class Beyond20RollRenderer {
         return {rolls};
     }
     processToHitAdvantage(advantage, rolls) {
+        if (rolls.length < 2) return rolls;
         if ([RollType.DOUBLE, RollType.ADVANTAGE, RollType.DISADVANTAGE].includes(advantage)) {
             const roll_1 = rolls[0];
             const roll_2 = rolls[1];

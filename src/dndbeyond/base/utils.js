@@ -74,9 +74,16 @@ function propertyListToDict(propList) {
         }
         if (labelElement.length > 0 && valueElement.length > 0) {
             let label = labelElement.text().trim();
-            const value = valueElement.text().trim();
+            let value = valueElement.text().trim();
             if (label.endsWith(":")) {
                 label = label.slice(0, -1);
+            }
+            if (label === "Damage Type") {
+                // Read one semantic damage type, rather than concatenating
+                // the visible label and accessible/icon text from DDB.
+                const icon = valueElement.find('[class*="damage-type"][aria-label]').first();
+                const type = String(icon.attr('aria-label') || value).match(/\b(acid|bludgeoning|cold|fire|force|lightning|necrotic|piercing|poison|psychic|radiant|slashing|thunder)\b/i);
+                if (type) value = type[1][0].toUpperCase() + type[1].slice(1).toLowerCase();
             }
             properties[label] = value;
         }

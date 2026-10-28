@@ -1,4 +1,3 @@
-if (window.godice?.rollResult) { window.__beyond20GoDiceConflict = true; } else {
 'use strict';
 
 var e$1=[],t$1=[];function n$1(n,r){if(n&&"undefined"!=typeof document){var a,s=!0===r.prepend?"prepend":"append",d=!0===r.singleTag,i="string"==typeof r.container?document.querySelector(r.container):document.getElementsByTagName("head")[0];if(d){var u=e$1.indexOf(i);-1===u&&(u=e$1.push(i)-1,t$1[u]={}),a=t$1[u]&&t$1[u][s]?t$1[u][s]:t$1[u][s]=c();}else a=c();65279===n.charCodeAt(0)&&(n=n.substring(1)),a.styleSheet?a.styleSheet.cssText+=n:a.appendChild(document.createTextNode(n));}function c(){var e=document.createElement("style");if(e.setAttribute("type","text/css"),r.attributes)for(var t=Object.keys(r.attributes),n=0;n<t.length;n++)e.setAttribute(t[n],r.attributes[t[n]]);var a="prepend"===s?"afterbegin":"beforeend";return i.insertAdjacentElement(a,e),e}}
@@ -21,7 +20,7 @@ var settings = {
 		"parent": {
 			"id": "loading_overlay"
 		}
-	}
+	}	
 };
 
 /**
@@ -1081,7 +1080,7 @@ class Utils {
 		if(value === dieFaces)
 			connectedDice.get(diceId).pulseLed(5, 30, 20, [0, 255, 0]);
 		
-		let diceRollsPrompt = document.querySelectorAll('form[id^="roll-resolver"]');
+		let diceRollsPrompt = document.querySelectorAll('form[id^="roll-resolver"');
 		
 		if (window.godice.rollResult?.isEnabled() && diceRollsPrompt && diceRollsPrompt.length > 0){
 			Utils.populateRollPrompt(diceRollsPrompt, dieType, value);
@@ -1111,6 +1110,10 @@ class Utils {
 	
 	static rollFieldUpdate(diceRollsPrompt, dieField){
 		console.debug(dieField);
+		const value = Number(dieField.value);
+		const maxValue = Number(dieField.max);
+		if (!(value > 0 && value <= maxValue)) return;
+
 		let remainRolls = parseInt(diceRollsPrompt[0].getAttribute("data-counter"));
 		
 		Utils.rollFieldFullfilled(dieField);
@@ -1123,7 +1126,9 @@ class Utils {
 	}
 	
 	static rollFieldFullfilled(dieField){
-		if(dieField.value && dieField.value != ""){
+		const value = Number(dieField.value);
+		const maxValue = Number(dieField.max);
+		if(value > 0 && value <= maxValue){
 			dieField.setAttribute('readonly', true);
 			dieField.parentElement.classList.add("fulfilled");
 			dieField.setAttribute("data-manual-roll", true);
@@ -1806,10 +1811,10 @@ var id = "godicemodule-resolver";
 
 class RollBonusPrompt {
 	
-	showRollBonusPrompt = async (formula, d20, defaults = {}) => {
+	showRollBonusPrompt = async (formula, d20) => {
 			//let modulePath = Utils.getModulePath();
 			let template;
-			let args = { template: "rollbonus", formula: formula, d20: d20, bonusOnly: !!defaults.lockAdvantage};
+			let args = { template: "rollbonus", formula: formula, d20: d20};
 			template = Utils.renderTemplate(window.godice.template, args);
 			let dialog = new Dialog({
 				id: id,
@@ -1817,28 +1822,7 @@ class RollBonusPrompt {
 				allowClose: false,
 				hideTitle: true
 			});
-			const form = dialog.popupEl;
-            form.querySelector('#advdis').value = [3,6].includes(defaults.advantage) ? 1 : [4,7].includes(defaults.advantage) ? -1 : 0;
-            form.querySelector('#elven').checked = defaults.advantage === 6;
-            if (defaults.lockAdvantage) {
-                for (const id of ['adv', 'dis', 'elven']) {
-                    const control = form.querySelector('#' + id);
-                    if (control) {
-                        control.style.display = 'none';
-                        if (id === 'elven' && control.previousElementSibling?.tagName === 'LABEL') control.previousElementSibling.style.display = 'none';
-                    }
-                }
-                const normal = form.querySelector('#nor');
-                if (normal) normal.textContent = 'Roll';
-            }
-            for (const [button, field, value] of [['adv','advdis',1],['nor','advdis',0],['dis','advdis',-1],['roll','rolltype',0],['crit','rolltype',1]]) {
-                const element = form.querySelector('#' + button);
-                if (element) {
-                    element.removeAttribute('onclick');
-                    element.addEventListener('click', () => { form.querySelector('#' + field).value = value; });
-                }
-            }
-            let promptData = await dialog.show();
+			let promptData = await dialog.show();
 			
 			let result ={};
 			
@@ -2094,24 +2078,8 @@ class RollResult {
 	isAutoSendEnabled() {
 		return false;
 	}
-	
-	async rollDice(formula, critType = 0, options = {}) {
-        if (options.raw) {
-            const match = /^(\d+)d(\d+)$/.exec(formula);
-            if (!match) throw new Error('Invalid raw dice formula.');
-            const amount = Number(match[1]), faces = Number(match[2]);
-            const prompts = Array.from({length: amount}, (_, index) => ({
-                name: formula, dieFaces: faces, diePlaceholder: '', index
-            }));
-            const inputs = await new DiceRollPrompt().showDicePrompt(formula, prompts);
-            const values = inputs.map(input => input.valueAsNumber);
-            if (values.length !== amount || values.some(value => !Number.isInteger(value) || value < 1 || value > faces)) {
-                throw new Error(`Enter or roll all ${amount} dice (1?${faces}) before submitting. Received: ${JSON.stringify(values)}`);
-            }
-            const result = roll(formula, values);
-            return {notation: formula, rolls: [{rolls: result.rolls, value: result.total}], total: result.total,
-                output: `${formula}: ${result.toString()} = ${result.total}`};
-        }	
+		
+	async rollDice(formula, critType = 0) {	
 		
 		var total = [];
 		var minTotal = [];
@@ -2122,7 +2090,7 @@ class RollResult {
 		var constants = [];
 		var diePrompt = [] ;
 		var rollReturn = new RollResult();
-		
+
 		var d20 = formula.includes("d20");
 		var formulaHasDie = formula.match(dieRegex);
 		var advdis = 0;
@@ -2130,12 +2098,12 @@ class RollResult {
 		var elvish = false;
 		var d20dice = (elvish&&advdis==1)?3:2;
 						
-		if(formulaHasDie && !options.raw){
+		if(formulaHasDie){
 			var rollBonus = await new RollBonusPrompt().showRollBonusPrompt(formula, d20);
 			
 			if(rollBonus["bonus"].startsWith("+") || rollBonus["bonus"].startsWith("-") )
 				formula = formula + rollBonus["bonus"];
-			else
+			else if(rollBonus["bonus"].length > 0)
 				formula= formula + "+" + rollBonus["bonus"];
 			
 			advdis = Number(rollBonus["advdis"]);
@@ -2143,7 +2111,7 @@ class RollResult {
 			elvish = rollBonus["elven"];
 			d20dice = (elvish&&advdis==1)?3:2;
 		}
-				
+		
 		var matches = formula.matchAll(formulaRegex);
 		
 		for (const match of matches) {
@@ -2184,7 +2152,8 @@ class RollResult {
 				results.push(term);
 				for (let i = 0; i < Number(match.groups.numberOfDice); i++) {
 					let dieroll = rollDice(match.groups.faces);
-					diePrompt.push({name: term, dieFaces:Number(match.groups.faces), diePlaceholder:dieroll, index: i});
+					let index = results.length-1;
+					diePrompt.push({name: term, dieFaces:Number(match.groups.faces), diePlaceholder:dieroll, index: index});
 				}
 			}
 		}	
@@ -2199,28 +2168,27 @@ class RollResult {
 		if(formulaHasDie){
 			var newRolls = await new DiceRollPrompt().showDicePrompt(formula, diePrompt);
 		}
-		results.forEach(function(result, i){
-			if(dieRegex.test(result)) {
+		results.forEach(function(term, index){
+			if(dieRegex.test(term)) {
 				const newroll = [];
 				for (const [key, value] of Object.entries(newRolls)) {
-					if (value.name.includes(result) && key != null) {
-						if (options.raw && !Number.isInteger(value.valueAsNumber)) throw new Error('Enter or roll a value for every die. No random values were sent.');
-                        newroll.push(isNaN(value.valueAsNumber)?Number(value.placeholder):value.valueAsNumber);
+					if (value.name === term+"-"+index && key != null) {
+						newroll.push(isNaN(value.valueAsNumber)?Number(value.placeholder):value.valueAsNumber);
 					}
 				}
-				let dieroll = roll(result, newroll);
+				let dieroll = roll(term, newroll);
 				total.push(dieroll.total);
 				minTotal.push(dieroll.min);
 				maxTotal.push(dieroll.max);
 				avgTotal.push(dieroll.avg);	
 				totalexpl.push(dieroll.toString());
-				this[i] = {rolls: dieroll.rolls, type: "roll-results", value: dieroll.total};
+				this[index] = {rolls: dieroll.rolls, type: "roll-results", value: dieroll.total};
 			} else {
-				total.push(result);
-				minTotal.push(result);
-				maxTotal.push(result);
-				avgTotal.push(result);
-				totalexpl.push(result);
+				total.push(term);
+				minTotal.push(term);
+				maxTotal.push(term);
+				avgTotal.push(term);
+				totalexpl.push(term);
 			}
 		}, results);
 		
@@ -2237,18 +2205,6 @@ class RollResult {
 		
 		return rollReturn;
 	}
-}
-
-async function collectBeyond20GoDiceBatch(groups) {
-    const prompts = groups.flatMap((group, g) => Array.from({length:group.amount}, (_, i) => ({name:'b20group'+g, dieFaces:group.faces, diePlaceholder:'', index:i})));
-    const results = await new DiceRollPrompt().showDicePrompt(groups.map(group => group.amount+'d'+group.faces).join(' + '), prompts);
-    if (results.length !== prompts.length) throw new Error('GoDice returned an incomplete dice batch.');
-    return groups.map((group, g) => Array.from({length:group.amount}, (_, i) => {
-        const matches = results.filter(result => result.name === 'b20group'+g+'-'+i);
-        const value = matches[0]?.valueAsNumber;
-        if (matches.length !== 1 || !Number.isInteger(value) || value < 1 || value > group.faces) throw new Error('Enter or roll every requested die before submitting.');
-        return value;
-    }));
 }
 
 class DiceBar {
@@ -2774,7 +2730,7 @@ var templateSource = `<!-- Template -->
 				{{/if}}
 		</div>
 		{{#if d20}}
-			<div class="dialog-buttons {{#if bonusOnly}}bonus-buttons-1{{else}}bonus-buttons-3{{/if}} ">
+			<div class="dialog-buttons bonus-buttons-3 ">
 					<div class ="bonus-button-column"><button type="submit" id="adv" class="modif" onclick='document.getElementById("advdis").value="1"'>Advantage</button></div>
 					<div class ="bonus-button-column"><button type="submit" id="nor" class="modif" onclick='document.getElementById("advdis").value="0"'>Normal</button></div>
 					<div class ="bonus-button-column"><button type="submit" id="dis" class="modif" onclick='document.getElementById("advdis").value="-1"'>Disadvantage</button></div>
@@ -2811,23 +2767,6 @@ window.godice.godiceDiceRegex =  /[+-]{0,1}\d+/g;
 window.godice.settings = settings;
 window.godice.template = templateSource;
 window.godice.rollResult = new RollResult();
-window.godice.beyond20Bonus = request => new RollBonusPrompt().showRollBonusPrompt(request.formula, request.d20, request);
-window.godice.beyond20Batch = collectBeyond20GoDiceBatch;
-// Prepare damage only; Beyond20 still evaluates its dice modifiers and totals.
-window.godice.prepareBeyond20Damage = async (formulas, critType) => {
-    if (!Array.isArray(formulas) || !formulas.length || formulas.some(f => typeof f !== 'string') || ![0,1].includes(critType))
-        throw new Error('Invalid damage request.');
-    const choice = await new RollBonusPrompt().showRollBonusPrompt(formulas.join(' + '), false);
-    const bonus = String(choice.bonus || '').replace(/\s+/g, '');
-    if (bonus && !/^[+-]?(?:\d*d(?:4|6|8|10|12|20|100)|\d+)(?:[+-](?:\d*d(?:4|6|8|10|12|20|100)|\d+))*$/i.test(bonus))
-        throw new Error('Invalid bonus. Use +2 or +1d4.');
-    formulas = formulas.slice();
-    formulas[0] += bonus ? (/^[+-]/.test(bonus) ? bonus : '+' + bonus) : '';
-    const critical = Number(choice.rolltype) === 1;
-    if (critical) formulas = formulas.map(formula => formula.replace(/(\d*)d(\d+)(?:r(?:o)?(?:<=|>=|=|<|>)\d+)?(?:min\d+)?(?:kh\d*|kl\d*)?/gi,
-        (term, amount, faces) => critType === 1 ? term + '+' + Number(amount || 1) * Number(faces) : term.replace(/^\d*d/i, (2 * Number(amount || 1)) + 'd')));
-    return {formulas, critical};
-};
 window.godice.utils = Utils;
 
 Utils.LoadStoredInfos();
@@ -2917,5 +2856,3 @@ GoDice.prototype.onMoveStable = (diceId, value, xyzArray) => {
 };
 
 console.debug("GODiceLibary Startup completed");
-
-}
