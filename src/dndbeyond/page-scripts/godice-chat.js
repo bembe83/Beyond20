@@ -9,7 +9,7 @@ function getGoDiceRollTitle(rollInfo) {
 
 function buildGoDiceChatCard(rollInfo, rolls, logo) {
     const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-    const image = logo ? `<img width="36" height="36" alt="GoDice" src="${escape('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(logo))}" style="display:block!important;width:36px!important;height:36px!important;object-fit:contain;padding:3px;background:#fff;border-radius:6px;flex-shrink:0">` : '';
+    const image = logo ? `<img width="36" height="36" alt="GoDice" src="${escape(logo)}" style="display:block!important;width:36px!important;height:36px!important;object-fit:contain;padding:3px;background:#fff;border-radius:6px;flex-shrink:0">` : '';
     let damageIndex = 0;
     const rows = rolls.map(roll => {
         const type = roll.rollType === 'damage' ? rollInfo.request?.['damage-types']?.[damageIndex++] : '';
@@ -36,7 +36,7 @@ async function publishGoDiceChatCard(rollInfo, rolls, postMessage) {
     if (!rollInfo.request?.godiceBrandedChat || typeof window.MB?.inject_chat !== 'function') return false;
     if (rollInfo.request.whisper === 1 && !window.PLAYER_NAME) return false; // Preserve private native delivery.
     const character = rollInfo.request.character || {};
-    const logo = window.godice?.godiceext?.godicelogo || '';
+    const logo = rollInfo.godiceLogoUrl || '';
     const damage = rolls.length > 0 && (rollInfo.rolls || []).every(roll => ['damage','critical-damage'].includes(roll.type));
     const data = {
         player: character.name || window.PLAYER_NAME || 'Character',

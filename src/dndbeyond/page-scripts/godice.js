@@ -46,44 +46,92 @@ if (!window.__beyond20GoDiceCapture) {
 
 if (!window.__beyond20GoDiceBridge) {
     window.__beyond20GoDiceBridge = true;
-    let busy = false;
+    let runtime = null;
+    let lifecycle = Promise.resolve();
+    let enabled = false;
+    let generation = 0;
+    let busy = null;
+    const cancelled = () => Object.assign(new Error('GoDice roll cancelled.'), {code: 'GODICE_CANCELLED'});
+    const checkConflict = () => {
+        if (window.EXPERIMENTAL_SETTINGS?.godiceRoller !== true) return;
+        const message = 'GoDice is enabled in AboveVTT. Disable the GoDice option in AboveVTT, then reload this character page to use Beyond20 GoDice.';
+        if (!window.__beyond20GoDiceConflictPrompted && typeof window.alert === 'function') {
+            window.__beyond20GoDiceConflictPrompted = true;
+            window.alert(message);
+        }
+        throw new Error(message);
+    };
+    const configure = value => {
+        enabled = value;
+        if (!value) {
+            generation++;
+            busy = null;
+            // destroy() aborts dialogs synchronously, even while mount() is pending.
+            const current = runtime;
+            runtime = null;
+            const cleanup = current ? current.destroy() : Promise.resolve();
+            lifecycle = Promise.all([lifecycle.catch(() => {}), cleanup]).then(() => {});
+            return lifecycle;
+        }
+        const session = generation;
+        lifecycle = lifecycle.catch(() => {}).then(async () => {
+            if (!enabled || session !== generation) throw cancelled();
+            checkConflict();
+            if (!runtime) runtime = GoDiceLibrary.createGoDice({instanceId: 'beyond20'});
+            await runtime.mount();
+            if (!enabled || session !== generation) throw cancelled();
+        });
+        return lifecycle;
+    };
     document.addEventListener('Beyond20_GoDiceRequest', async event => {
         let request;
         try { request = JSON.parse(event.detail); } catch (_) { return; }
         if (!request || typeof request.id !== 'string') return;
         const reply = {id: request.id};
-        let acquired = false;
+        const token = {};
         try {
             guardAboveVttGoDiceRoller();
-            // Recheck on each request in case AboveVTT was enabled after load.
-            if (window.EXPERIMENTAL_SETTINGS?.godiceRoller === true || window.__beyond20GoDiceConflict) {
-                const message = 'GoDice is enabled in AboveVTT. Disable the GoDice option in AboveVTT, then reload this character page to use Beyond20 GoDice.';
-                if (!window.__beyond20GoDiceConflictPrompted && typeof window.alert === 'function') {
-                    window.__beyond20GoDiceConflictPrompted = true;
-                    window.alert(message);
-                }
-                throw new Error(message);
-            }
-            if (busy) throw new Error('Finish the current GoDice popup first.');
-            busy = true;
-            acquired = true;
             if (request.action === 'configure') {
-                window.godice?.dicebar?.enable(!!request.enabled);
-                const bar = document.getElementById('dicebar');
-                if (bar) bar.style.display = request.enabled ? '' : 'none';
-            } else if (request.action === 'publish') {
-                if (!window.__beyond20PublishGoDice) throw new Error('D&D Beyond game log is not ready. Reload the character sheet.');
-                await window.__beyond20PublishGoDice(request.rollInfo);
-            } else if (request.action === 'roll') {
-                if (typeof request.formula !== 'string' || request.formula.length > 2000 || ![0,1].includes(request.critType))
-                    throw new Error('Invalid GoDice roll request.');
-                if (typeof window.godice?.rollResult?.rollDice !== 'function')
-                    throw new Error('GoDice library is not ready. Reload the character page.');
-                reply.value = await window.godice.rollResult.rollDice(request.formula, request.critType);
-            } else throw new Error('Unknown GoDice request.');
-        } catch (error) { reply.error = error.message; }
-        finally { if (acquired) busy = false; }
+                await configure(!!request.enabled);
+            } else {
+                const session = generation;
+                await lifecycle;
+                if (!enabled || !runtime || session !== generation) throw cancelled();
+                if (request.session !== undefined && request.session !== generation) throw cancelled();
+                checkConflict();
+                if (busy) throw new Error('Finish the current GoDice popup first.');
+                busy = token;
+                const current = runtime;
+                if (request.action === 'publish') {
+                    if (request.session === undefined)
+                        throw new Error('GoDice integration was updated. Reload the Beyond20 extension and this character page before rolling again.');
+                    if (request.session !== generation) throw cancelled();
+                    if (!window.__beyond20PublishGoDice) throw new Error('D&D Beyond game log is not ready. Reload the character sheet.');
+                    await window.__beyond20PublishGoDice({...request.rollInfo, godiceLogoUrl: current.logoUrl}, () => {
+                        if (!enabled || session !== generation) throw cancelled();
+                    });
+                } else if (request.action === 'roll') {
+                    if (typeof request.formula !== 'string' || request.formula.length > 2000 || ![0,1].includes(request.critType))
+                        throw new Error('Invalid GoDice roll request.');
+                    const result = await current.rollResult.rollDice(request.formula, request.critType);
+                    if (!enabled || session !== generation) throw cancelled();
+                    // Public result data only: result.context contains circular runtime references.
+                    reply.value = {
+                        notation: result.notation,
+                        rolls: result.rolls.map(part => part && Array.isArray(part.rolls) ? {
+                            type: part.type, value: part.value,
+                            rolls: part.rolls.map(die => ({initialValue: die.initialValue, value: die.value}))
+                        } : part),
+                        total: result.total, output: result.output,
+                        averageTotal: result.averageTotal, minTotal: result.minTotal, maxTotal: result.maxTotal
+                    };
+                } else if (request.action !== 'session') throw new Error('Unknown GoDice request.');
+                reply.session = session;
+            }
+        } catch (error) { reply.error = error.message; reply.code = error.code; }
+        finally { if (busy === token) busy = null; }
         document.dispatchEvent(new CustomEvent('Beyond20_GoDiceReply', {detail: JSON.stringify(reply)}));
     });
 }
+
 document.documentElement.dataset.beyond20GodiceReady = 'true';

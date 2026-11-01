@@ -79,10 +79,20 @@ player's AboveVTT client; embedded-image rendering has not been browser-tested.
 
 ## Native dice-pack selection
 
-The library bundle is used unchanged. Its public instance is `window.godice`,
-and its dice bar and popup IDs are the library's own IDs. Same-page coexistence
-with another loaded copy remains unresolved pending a separate design in the
-GoDiceLibrary project; this adapter does not isolate or rewrite the library.
+The library bundle is used unchanged. Beyond20 creates a private runtime with
+`GoDiceLibrary.createGoDice({instanceId: 'beyond20'})` and awaits `mount()`.
+Its bar, popups, styles, settings, and devices belong to that runtime, with UI
+inside its shadow root. Beyond20 does not assign or use `window.godice`.
+Disabling GoDice cancels open dialogs and awaits `destroy()`; re-enabling waits
+for cleanup before creating a fresh runtime. Cancelled rolls produce no result
+card or game-log publication. Only plain result data crosses the page bridge;
+the circular runtime context stays private. Branded cards use the runtime's
+embedded `logoUrl` directly.
+
+Saved devices use `godice:beyond20:v1:devices`. The library does not import the
+old shared cookie, so previously paired dice may need to be connected again.
+An inactive AboveVTT runtime may coexist on the page, but physical devices must
+be owned by one active integration at a time.
 Blank dice inputs accept the library's generated fallback. Beyond20 validates
 returned values before publishing. While Beyond20 GoDice is selected, AboveVTT's roller on the same
 character page is prevented from starting a competing automatic roll. Disabling

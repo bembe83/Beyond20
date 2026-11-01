@@ -94,9 +94,11 @@ class DNDBRoller {
     }
     async resolveRolls(name, rolls, request={}) {
         
+        let godiceSession;
         if (dndbeyondDiceRoller._settings['use-godice']) {
+            godiceSession = await GoDice.request('session', {});
             if (!rolls.length) return; // No completed values to publish in this phase.
-            await new GoDice(name, rolls, request).roll();
+            await new GoDice(name, rolls, request, godiceSession).roll();
         } else if (dndbeyondDiceRoller._settings['use-digital-dice'] && DigitalDiceManager.isEnabled()) {
             const digital = new DigitalDice(name, rolls, {whisper: request.whisper === WhisperType.YES});
             try {
@@ -109,6 +111,7 @@ class DNDBRoller {
             await Promise.all(rolls.map(roll => roll.roll()))
         }
         
+        if (godiceSession !== undefined) await GoDice.request('session', {session: godiceSession});
         const rollInfo = {
             name,
             rolls: rolls.map(r => r.toJSON()),
@@ -116,8 +119,8 @@ class DNDBRoller {
         }
         if (dndbeyondDiceRoller._settings["roll-to-game-log"]) {
             if (rollInfo.request.godice) {
-                try { await GoDice.request('publish', {rollInfo}); }
-                catch (error) { console.error('GoDice game log publication failed:', error); dndbeyondDiceRoller._displayer.displayError(error.message); }
+                try { await GoDice.request('publish', {rollInfo, session: godiceSession}); }
+                catch (error) { if (GoDice.isCancelled(error)) throw error; console.error('GoDice game log publication failed:', error); dndbeyondDiceRoller._displayer.displayError(error.message); }
             } else sendCustomEvent("MBFulfilledRoll", [rollInfo]);
         }
     }
@@ -132,6 +135,14 @@ class DNDBPrompter {
 }
 
 const dndbeyondDiceRoller = new Beyond20RollRenderer(new DNDBRoller(), new DNDBPrompter(), new DNDBDisplayer());
+// Cancellation stops the entire render pipeline; handle it only at user entry points.
+for (const method of ['handleRollRequest', 'rollDice']) {
+    const original = dndbeyondDiceRoller[method];
+    dndbeyondDiceRoller[method] = async function (...args) {
+        try { return await original.apply(this, args); }
+        catch (error) { if (!GoDice.isCancelled(error)) throw error; }
+    };
+}
 dndbeyondDiceRoller.setBaseURL(chrome.runtime.getURL(""));
 dndbeyondDiceRoller.setSettings(getDefaultSettings());
 dndbeyondDiceRoller.handleRollError = (request, error) => {

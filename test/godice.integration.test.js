@@ -8,24 +8,26 @@ let dicePrompts = [];
 const math = Object.create(Math);
 math.random = () => 0.5;
 const context = vm.createContext({console:{...console,debug(){}}, Math:math, window:{godice:{}},
-    RollBonusPrompt:class {async showRollBonusPrompt() { return choice; }},
-    DiceRollPrompt:class {async showDicePrompt(formula, prompts) {
+    TestRollBonusPrompt:class {async showRollBonusPrompt() { return choice; }},
+    TestDiceRollPrompt:class {async showDicePrompt(formula, prompts) {
         dicePrompts.push({formula,prompts});
         return prompts.map(prompt=>({name:prompt.name+'-'+prompt.index,
             valueAsNumber:entered.length ? entered.shift() : NaN, placeholder:String(prompt.diePlaceholder)}));
     }}
 });
-vm.runInContext(bundle.slice(bundle.indexOf('function rollDice(numberOfSides)'),bundle.indexOf('class DiceBar {')) +
-    '\nthis.LibraryRollResult = RollResult;',context);
+// Keep the public factory and roll engine; replace only interactive dialogs in this VM.
+Object.assign(context, {AbortController, structuredClone, setTimeout, clearTimeout});
+vm.runInContext(bundle.replaceAll('new RollBonusPrompt(', 'new TestRollBonusPrompt(')
+    .replaceAll('new DiceRollPrompt(', 'new TestDiceRollPrompt('), context);
 vm.runInContext(fs.readFileSync('src/common/dice.js','utf8') + '\n' + fs.readFileSync('src/dndbeyond/base/godice.js','utf8') + '\nthis.GoDiceAdapter = GoDice; this.Roll = DNDBRoll;', context);
 context.CriticalRules = {PHB:0, HOMEBREW_MAX:1};
 context.dndbeyondDiceRoller = {_settings:{'critical-homebrew':0}};
-const library=new context.LibraryRollResult();
+const library=context.GoDiceLibrary.createGoDice({instanceId:'test',storage:{getItem:()=>null,setItem(){}}}).rollResult;
 const Adapter=context.GoDiceAdapter;
 const normalRequest=async (action,payload)=> {
     assert.equal(action,'roll');
     assert.deepEqual(Object.keys(payload).sort(),['critType','formula']);
-    return JSON.parse(JSON.stringify(await library.rollDice(payload.formula,payload.critType)));
+    return JSON.parse(JSON.stringify(await library.rollDice(payload.formula,payload.critType), (key,value)=>key === 'context' ? undefined : value));
 };
 (async () => {
     const utilsSource=fs.readFileSync('src/dndbeyond/base/utils.js','utf8');
@@ -301,49 +303,119 @@ const normalRequest=async (action,payload)=> {
     await new Adapter('Notes',[note],{type:'custom'}).roll();
     assert.equal(note.dice[0].amount,4);
     assert.equal(note.total,12);
+    // Exercise the unchanged browser bundle's public mount/destroy API with a minimal DOM.
+    function element() {
+        return {dataset:{},style:{},children:[],querySelectorAll:()=>[],
+            appendChild(child){this.children.push(child);child.parentNode=this;return child;},
+            attachShadow(){return this.shadowRoot=element();},
+            remove(){if(this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this),1);}};
+    }
+    context.document={readyState:'complete',body:element(),createElement:element};
+    context.jQuery={fn:{}};
+    const first=context.GoDiceLibrary.createGoDice({instanceId:'beyond20',storage:{getItem:()=>null,setItem(){}}});
+    const second=context.GoDiceLibrary.createGoDice({instanceId:'abovevtt',storage:{getItem:()=>null,setItem(){}}});
+    for(const runtime of [first,second]) {
+        runtime.dicebar.init=()=>{};
+        runtime.utils.reconnectLoadedDice=()=>{};
+        await runtime.mount();
+    }
+    assert.notEqual(first.root,second.root);
+    assert.notEqual(first.connectedDice,second.connectedDice);
+    assert.match(first.logoUrl,/^data:image\/svg\+xml;base64,/);
+    assert.equal(context.window.godice !== first,true);
+    await first.destroy();
+    assert.equal(context.document.body.children.length,1,'destroy removes only its own shadow host');
+    await assert.rejects(first.mount(),error=>error.code==='GODICE_CANCELLED');
+    await second.destroy();
     const replies = [];
     let requestListener;
     let published = 0;
+    let mounts = 0, destroys = 0, publicCalls = 0;
+    let finishDialog;
+    let cleanup;
+    let waitForCleanup = false;
     const bridgeContext = vm.createContext({console,
-        window:{__beyond20GoDiceCapture:true,__beyond20PublishGoDice:async info => {published++;assert.equal(info.name,'Hit');}},
+        GoDiceLibrary:{createGoDice(options) {
+            assert.equal(options.instanceId,'beyond20');
+            return {logoUrl:'data:image/png;base64,logo',mount:async()=>{mounts++;},
+                destroy:()=>{destroys++; if(finishDialog) finishDialog.reject(Object.assign(new Error('cancelled'),{code:'GODICE_CANCELLED'}));
+                    return waitForCleanup ? new Promise(resolve=>{cleanup=resolve;}) : Promise.resolve();},
+                rollResult:{rollDice:async function(formula,critType) {
+                    assert.equal(arguments.length,2);
+                    publicCalls++;
+                    if(formula==='2d6') return new Promise((resolve,reject)=>{finishDialog={resolve,reject};});
+                    const result={notation:'1d20+2',rolls:[{rolls:[{initialValue:12,value:12}]}]};
+                    result.context={result};
+                    return result;
+                }}};
+        }},
+        window:{__beyond20GoDiceCapture:true,__beyond20PublishGoDice:async info => {
+            published++;assert.equal(info.name,'Hit');assert.equal(info.godiceLogoUrl,'data:image/png;base64,logo');}},
         document:{documentElement:{dataset:{}}, addEventListener:(name,listener)=>{requestListener=listener;},dispatchEvent:event=>replies.push(JSON.parse(event.detail))},
         CustomEvent:class {constructor(type,init) {this.type=type;this.detail=init.detail;}}
     });
     vm.runInContext(bridge,bridgeContext);
-    await requestListener({detail:JSON.stringify({id:'publication',action:'publish',rollInfo:{name:'Hit'}})});
-    assert.equal(published,1);
-    assert.equal(replies[0].id,'publication');
-    assert.equal(replies[0].error,undefined);
-    delete bridgeContext.window.__beyond20PublishGoDice;
-    await requestListener({detail:JSON.stringify({id:'missing',action:'publish',rollInfo:{name:'Hit'}})});
-    assert.match(replies[1].error,/not ready/);
+    const send=async payload=>{await requestListener({detail:JSON.stringify({id:'test',...payload})});return replies.at(-1);};
     const conflictPrompts=[];
     bridgeContext.window.alert=message=>conflictPrompts.push(message);
     bridgeContext.window.EXPERIMENTAL_SETTINGS={godiceRoller:true};
-    await requestListener({detail:JSON.stringify({id:'above-enabled',action:'configure',enabled:true})});
-    assert.match(replies[2].error,/Disable the GoDice option in AboveVTT, then reload/);
+    assert.match((await send({action:'configure',enabled:true})).error,/Disable the GoDice option/);
+    assert.equal((await send({action:'configure',enabled:false})).error,undefined,'disable remains possible during conflicts');
     bridgeContext.window.EXPERIMENTAL_SETTINGS.godiceRoller=false;
-    bridgeContext.window.godice={rollResult:{}};
-    bridgeContext.document.getElementById=()=>null;
-    await requestListener({detail:JSON.stringify({id:'above-disabled',action:'configure',enabled:true})});
-    assert.equal(replies[3].error,undefined,'a loaded but disabled library must not block Beyond20');
-    bridgeContext.window.__beyond20GoDiceConflict=true;
-    await requestListener({detail:JSON.stringify({id:'reload-needed',action:'configure',enabled:true})});
-    assert.match(replies[4].error,/reload/,'a blocked initialization requires a page reload');
-    assert.equal(conflictPrompts.length,1,'show the disable-and-reload prompt once per page');
-    bridgeContext.window.__beyond20GoDiceConflict=false;
-    let publicCalls=0;
-    bridgeContext.window.godice={rollResult:{rollDice:async function(formula,critType) {
-        assert.equal(arguments.length,2,'use only the unmodified two-argument public API');
-        assert.equal(formula,'1d20');
-        assert.equal(critType,0);
-        publicCalls++;
-        return {notation:'1d20+2'};
-    }}};
-    await requestListener({detail:JSON.stringify({id:'isolated-roll',action:'roll',formula:'1d20',critType:0})});
-    assert.equal(replies[5].error,undefined);
-    assert.equal(replies[5].value.notation,'1d20+2');
+    bridgeContext.window.godice={ownedByAboveVTT:true};
+    assert.equal((await send({action:'configure',enabled:true})).error,undefined);
+    await send({action:'configure',enabled:true});
+    // Factory mount is idempotent; adapter keeps the same runtime.
+    const result=await send({action:'roll',formula:'1d20',critType:0});
+    assert.equal(result.value.notation,'1d20+2');
+    assert.equal('context' in result.value,false,'circular runtime is excluded from replies');
     assert.equal(publicCalls,1);
+    const missingSession=await send({action:'publish',rollInfo:{name:'Hit'}});
+    assert.match(missingSession.error,/Reload the Beyond20 extension and this character page/);
+    assert.equal(missingSession.code,undefined,'outdated clients are not reported as cancelled rolls');
+    const session=result.session;
+    await send({action:'publish',session,rollInfo:{name:'Hit'}});
+    assert.equal(published,1);
+    assert.equal(bridgeContext.window.godice.ownedByAboveVTT,true);
+    const pendingDialog=send({action:'roll',formula:'2d6',critType:0,session});
+    await new Promise(resolve=>setImmediate(resolve));
+    waitForCleanup=true;
+    const disabling=send({action:'configure',enabled:false});
+    const remounting=send({action:'configure',enabled:true});
+    const before=mounts;
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(mounts,before,'re-enable waits for destroy storage cleanup');
+    cleanup();
+    await Promise.all([pendingDialog,disabling,remounting]);
+    assert.ok(replies.some(reply=>reply.code==='GODICE_CANCELLED'));
+    assert.equal(destroys,1);
+    assert.equal((await send({action:'publish',session,rollInfo:{name:'Hit'}})).code,'GODICE_CANCELLED');
+    assert.equal(published,1,'cancelled session cannot publish after re-enable');
+    assert.equal(conflictPrompts.length,1);
+    // Use the real content/page transport together, including session acquisition.
+    const transportListeners=new Map();
+    bridgeContext.document.addEventListener=(type,listener)=>{
+        if(!transportListeners.has(type)) transportListeners.set(type,new Set());
+        transportListeners.get(type).add(listener);
+    };
+    bridgeContext.document.removeEventListener=(type,listener)=>transportListeners.get(type)?.delete(listener);
+    bridgeContext.document.dispatchEvent=event=>{
+        for(const listener of [...(transportListeners.get(event.type)||[])]) listener(event);
+    };
+    transportListeners.set('Beyond20_GoDiceRequest',new Set([requestListener]));
+    bridgeContext.crypto=require('crypto');
+    vm.runInContext(fs.readFileSync('src/common/dice.js','utf8')+'\n'+
+        fs.readFileSync('src/dndbeyond/base/godice.js','utf8')+'\nthis.TransportGoDice=GoDice;this.TransportRoll=DNDBRoll;',bridgeContext);
+    bridgeContext.TransportGoDice.loading=Promise.resolve();
+    bridgeContext.CriticalRules={PHB:0,HOMEBREW_MAX:1};
+    bridgeContext.dndbeyondDiceRoller={_settings:{'use-godice':true,'roll-to-game-log':true}};
+    const resolverSource=fs.readFileSync('src/dndbeyond/base/dice.js','utf8');
+    vm.runInContext(resolverSource.slice(resolverSource.indexOf('class DNDBRoller'),resolverSource.indexOf('class DNDBPrompter'))+
+        '\nthis.TransportRoller=DNDBRoller;',bridgeContext);
+    const transportedRoll=new bridgeContext.TransportRoll('1d20+2');
+    await new bridgeContext.TransportRoller().resolveRolls('Hit',[transportedRoll],{});
+    assert.equal(transportedRoll.total,14);
+    assert.equal(published,2,'normal submission publishes across the real request/reply bridge');
     const output = [];
     const displayContext = vm.createContext({console,
         dndbeyondDiceRoller:{_settings:{'use-godice':true}},
@@ -443,11 +515,11 @@ const normalRequest=async (action,payload)=> {
         MB:{inject_chat:async data=>sharedCards.push(data)}
     }});
     vm.runInContext(fs.readFileSync('src/dndbeyond/page-scripts/godice-chat.js','utf8'),chatContext);
-    const brandedInfo = {name:'Sword <script>',rolls:[{type:'damage'}],request:{godice:true,godiceBrandedChat:true,character:{name:'Geralt'},whisper:0}};
+    const brandedInfo = {godiceLogoUrl:'data:image/png;base64,logo',name:'Sword <script>',rolls:[{type:'damage'}],request:{godice:true,godiceBrandedChat:true,character:{name:'Geralt'},whisper:0}};
     const brandedRolls = [{rollType:'Slashing',diceNotationStr:'2d6+4',result:{text:'3+2+4',total:9}}];
     assert.equal(await chatContext.publishGoDiceChatCard(brandedInfo,brandedRolls),true);
     assert.match(sharedCards[0].text,/Rolled with GoDice/);
-    assert.match(sharedCards[0].text,/data:image\/svg\+xml/);
+    assert.match(sharedCards[0].text,/data:image\/png;base64,logo/);
     assert.match(sharedCards[0].text,/Sword &lt;script&gt;/);
     assert.equal(sharedCards[0].result,9);
     assert.equal(sharedCards[0].whisper,'');
@@ -544,6 +616,16 @@ const normalRequest=async (action,payload)=> {
     brandedInfo.request['damage-types']=['Slashing'];
     await chatContext.fulfilledRoll(brandedInfo);
     assert.equal(nativeMessages[9].data.action,'Flame Tongue Greatsword\nSlashing');
+    const beforeCancelledPublish=nativeMessages.length;
+    let lookupDone;
+    chatContext.resolveGoDiceSetId=()=>new Promise(resolve=>{lookupDone=resolve;});
+    const cancelledPublication=chatContext.fulfilledRoll(brandedInfo,()=>{
+        throw Object.assign(new Error('cancelled'),{code:'GODICE_CANCELLED'});
+    });
+    await new Promise(resolve=>setImmediate(resolve));
+    lookupDone('06002');
+    await assert.rejects(cancelledPublication,error=>error.code==='GODICE_CANCELLED');
+    assert.equal(nativeMessages.length,beforeCancelledPublish,'disable during pack lookup prevents pending and fulfilled messages');
     let configCalls=0;
     let settingsNow=1000;
     const settingsWarnings=[];

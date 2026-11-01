@@ -485,7 +485,7 @@ if (!window.__beyond20_mb2_initialized__) {
         });
     }
 
-    async function fulfilledRoll(rollData) {
+    async function fulfilledRoll(rollData, assertActive = () => {}) {
         if (!rollData) return;
         if (rollData.request?.godice) {
             if (!Array.isArray(rollData.rolls) || !rollData.rolls.length) return;
@@ -500,6 +500,7 @@ if (!window.__beyond20_mb2_initialized__) {
                 context.messageTarget = messageBroker._mb.userId;
             }
             const setId = await resolveGoDiceSetId();
+            assertActive();
             const action = getGoDiceRollTitle({...rollData, name:normalizeActionName(rollData.name)});
             const fulfilled = {
                 eventType: 'dice/roll/fulfilled', source: 'web', persist: true,

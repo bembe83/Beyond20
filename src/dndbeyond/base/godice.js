@@ -2,7 +2,8 @@
 class GoDice {
     static queue = Promise.resolve();
     static loading = null;
-    constructor(name, rolls, request = {}) {
+    constructor(name, rolls, request = {}, session) {
+        this.session = session;
         this.name = name;
         this.rolls = rolls;
         this.request = request;
@@ -30,16 +31,22 @@ class GoDice {
                 try { reply = JSON.parse(event.detail); } catch (_) { return; }
                 if (reply.id !== id) return;
                 document.removeEventListener('Beyond20_GoDiceReply', listener);
-                reply.error ? reject(new Error(reply.error)) : resolve(reply.value);
+                if (reply.error) reject(Object.assign(new Error(reply.error), {code: reply.code}));
+                else resolve(action === 'session' ? reply.session : reply.value);
             };
             document.addEventListener('Beyond20_GoDiceReply', listener);
             document.dispatchEvent(new CustomEvent('Beyond20_GoDiceRequest', {detail: JSON.stringify({id, action, ...payload})}));
         });
     }
+    static isCancelled(error) { return error?.code === 'GODICE_CANCELLED'; }
     roll() {
         const result = GoDice.queue.then(() => this.resolve());
         GoDice.queue = result.catch(() => {});
         return result;
+    }
+    rollRequest(payload) {
+        if (this.session !== undefined) payload.session = this.session;
+        return GoDice.request('roll', payload);
     }
     static libraryModifier(die) {
         const keep = die._modifiers.match(/k[hl](\d*)/);
@@ -93,7 +100,7 @@ class GoDice {
             const rule = Number(dndbeyondDiceRoller._settings['critical-homebrew'] || 0);
             if (damage && ![CriticalRules.PHB, CriticalRules.HOMEBREW_MAX].includes(rule))
                 throw new Error('GoDice supports Standard PHB and Perfect rolls critical rules. Reroll all damages is not supported.');
-            const result = await GoDice.request('roll', {
+            const result = await this.rollRequest({
                 formula:GoDice.libraryFormula(roll), critType:damage && rule === CriticalRules.HOMEBREW_MAX ? 1 : 0
             });
             const replacement = GoDice.fromResult(result, roll);
@@ -103,7 +110,7 @@ class GoDice {
                 const reroll = die.rerollDice;
                 try {
                     die.rerollDice = async amount => {
-                        const extra = GoDice.fromResult(await GoDice.request('roll', {
+                        const extra = GoDice.fromResult(await this.rollRequest({
                             formula:amount + 'd' + die.faces, critType:0
                         }));
                         if (extra.formula.replace(/\s+/g, '') !== amount + 'd' + die.faces)
