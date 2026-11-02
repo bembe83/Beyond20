@@ -485,6 +485,19 @@ const normalRequest=async (action,payload)=> {
     lateBroker.postMessage({eventType:'dice/roll/fulfilled',data:{__b20Override__:true}},{physical:true});
     assert.equal(transportMessages.length,3);
     delete brokerContext.window.diceRoller;
+    // DDB-only/mobile pages have the native broker, without AboveVTT's diceRoller.
+    const nativeOnlyMessages=[];
+    transport.dispatch=message=>nativeOnlyMessages.push(message);
+    const nativeOnlyBroker=new brokerContext.Broker();
+    nativeOnlyBroker.register();
+    for (const eventType of ['dice/roll/pending','dice/roll/fulfilled'])
+        nativeOnlyBroker.postMessage({eventType,data:{__b20Override__:true}},{physical:true});
+    assert.deepEqual(nativeOnlyMessages.map(message=>message.eventType),['dice/roll/pending','dice/roll/fulfilled']);
+    // A partially initialized AboveVTT roller may also lack the local echo handler.
+    brokerContext.window.diceRoller={};
+    nativeOnlyBroker.postMessage({eventType:'dice/roll/fulfilled',data:{__b20Override__:true}},{physical:true});
+    assert.equal(nativeOnlyMessages.length,3);
+    delete brokerContext.window.diceRoller;
     let fixedRequests=0;
     Adapter.request = async () => {fixedRequests++;throw new Error('Fixed damage must not open a popup');};
     const fixed = new context.Roll('5');

@@ -222,7 +222,7 @@ class DDBMessageBroker {
         const physicalDispatch = this._physicalDispatch || window.diceRoller?.ddbDispatch?.bind(window.diceRoller);
         if (physical && physicalDispatch) {
             physicalDispatch(message);
-            if (typeof window.diceRoller.ddbonmessage === 'function')
+            if (typeof window.diceRoller?.ddbonmessage === 'function')
                 window.diceRoller.ddbonmessage({data: JSON.stringify(message)});
         } else this._mb.dispatch(message);
         return message;
