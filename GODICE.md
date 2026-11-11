@@ -53,7 +53,7 @@ without AboveVTT. Switching GoDice off restores its normal visibility.
 This suppresses the visual animation; it does not change D&D Beyond's saved dice settings.
 Enable **Send rolls to the D&D Beyond Game Log** to publish physical results
 for AboveVTT. Whispered results are published to self.
-An existing GoDice integration in the page must be disabled before using this one.
+Page ownership is controlled by **Disable Beyond20 on AboveVTT pages**.
 
 ## Validation
 
@@ -97,10 +97,9 @@ Blank dice inputs accept the library's generated fallback. Beyond20 validates
 returned values before publishing. While Beyond20 GoDice is selected, AboveVTT's roller on the same
 character page is prevented from starting a competing automatic roll. Disabling
 Beyond20 GoDice restores that roller's normal behavior.
-If AboveVTT's GoDice setting is enabled, Beyond20 blocks GoDice requests and
-shows a prompt to disable that option in AboveVTT and reload the character page.
-The setting is checked again on every request. Switch integrations by changing
-their settings and reloading; they must not both manage the physical dice.
+Beyond20 does not block its isolated runtime based on AboveVTT's GoDice setting.
+The AboveVTT URL activation switch controls which integration runs on a page.
+
 
 Native messages first use AboveVTT's `window.mydice.data.setId` when available.
 Otherwise Beyond20 requests the logged-in user's dice configuration directly
@@ -108,3 +107,12 @@ from D&D Beyond. Successful lookups are cached for 60 seconds and concurrent
 lookups share one request. Failed lookups wait 30 seconds before retrying and
 fall back to D&D Beyond's default pack, without preventing roll publication.
 The fallback does not store or log the authentication token.
+
+## AboveVTT page ownership
+
+**Disable Beyond20 on AboveVTT pages** is enabled by default in extension settings.
+On D&D Beyond URLs containing `abovevtt=true`, Beyond20 does not initialize its
+page features, including GoDice, roll interception, UI observers, and message
+broker injection. Ordinary character pages continue to work normally. Disable
+this switch to use Beyond20 on those pages again. Refresh affected pages after
+changing it; the switch does not unload features already running in a tab.

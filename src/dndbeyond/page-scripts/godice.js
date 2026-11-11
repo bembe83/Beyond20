@@ -52,15 +52,6 @@ if (!window.__beyond20GoDiceBridge) {
     let generation = 0;
     let busy = null;
     const cancelled = () => Object.assign(new Error('GoDice roll cancelled.'), {code: 'GODICE_CANCELLED'});
-    const checkConflict = () => {
-        if (window.EXPERIMENTAL_SETTINGS?.godiceRoller !== true) return;
-        const message = 'GoDice is enabled in AboveVTT. Disable the GoDice option in AboveVTT, then reload this character page to use Beyond20 GoDice.';
-        if (!window.__beyond20GoDiceConflictPrompted && typeof window.alert === 'function') {
-            window.__beyond20GoDiceConflictPrompted = true;
-            window.alert(message);
-        }
-        throw new Error(message);
-    };
     const configure = value => {
         enabled = value;
         if (!value) {
@@ -76,7 +67,6 @@ if (!window.__beyond20GoDiceBridge) {
         const session = generation;
         lifecycle = lifecycle.catch(() => {}).then(async () => {
             if (!enabled || session !== generation) throw cancelled();
-            checkConflict();
             if (!runtime) runtime = GoDiceLibrary.createGoDice({instanceId: 'beyond20'});
             await runtime.mount();
             if (!enabled || session !== generation) throw cancelled();
@@ -98,7 +88,6 @@ if (!window.__beyond20GoDiceBridge) {
                 await lifecycle;
                 if (!enabled || !runtime || session !== generation) throw cancelled();
                 if (request.session !== undefined && request.session !== generation) throw cancelled();
-                checkConflict();
                 if (busy) throw new Error('Finish the current GoDice popup first.');
                 busy = token;
                 const current = runtime;

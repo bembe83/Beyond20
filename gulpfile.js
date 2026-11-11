@@ -167,6 +167,16 @@ const SRC_FILES = {
         "src/common/sandbox-footer.js"
 	]
 }
+// Gate the entire content bundle, including dependencies with startup side effects.
+for (const target of Object.keys(SRC_FILES)) {
+    if (target.startsWith('dndbeyond_') && target !== 'dndbeyond_mb') {
+        SRC_FILES[target] = [
+            'src/dndbeyond/content-scripts/activation-header.js',
+            ...SRC_FILES[target],
+            'src/dndbeyond/content-scripts/activation-footer.js'
+        ];
+    }
+}
 const CSS_FILES = ['src/extension/beyond20.css']
 
 const targets = {};

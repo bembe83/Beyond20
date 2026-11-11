@@ -127,6 +127,14 @@ const options_list = {
         "advanced": true
     },
 
+    "disable-on-abovevtt": {
+        "short": "Disable Beyond20 on AboveVTT pages",
+        "title": "Disable Beyond20 on AboveVTT pages",
+        "description": "Use AboveVTT's functionality on D&D Beyond pages whose URL contains abovevtt=true. Disables all Beyond20 page features, including GoDice, on those pages. Refresh the page after changing this setting.",
+        "type": "bool",
+        "default": true
+    },
+
     "use-godice": {
         "short": "Use GoDice physical dice",
         "title": "Use GoDice physical dice",

@@ -359,9 +359,8 @@ const normalRequest=async (action,payload)=> {
     const conflictPrompts=[];
     bridgeContext.window.alert=message=>conflictPrompts.push(message);
     bridgeContext.window.EXPERIMENTAL_SETTINGS={godiceRoller:true};
-    assert.match((await send({action:'configure',enabled:true})).error,/Disable the GoDice option/);
-    assert.equal((await send({action:'configure',enabled:false})).error,undefined,'disable remains possible during conflicts');
-    bridgeContext.window.EXPERIMENTAL_SETTINGS.godiceRoller=false;
+    assert.equal((await send({action:'configure',enabled:true})).error,undefined,
+        'AboveVTT GoDice settings do not block the isolated Beyond20 runtime');
     bridgeContext.window.godice={ownedByAboveVTT:true};
     assert.equal((await send({action:'configure',enabled:true})).error,undefined);
     await send({action:'configure',enabled:true});
@@ -391,7 +390,7 @@ const normalRequest=async (action,payload)=> {
     assert.equal(destroys,1);
     assert.equal((await send({action:'publish',session,rollInfo:{name:'Hit'}})).code,'GODICE_CANCELLED');
     assert.equal(published,1,'cancelled session cannot publish after re-enable');
-    assert.equal(conflictPrompts.length,1);
+    assert.equal(conflictPrompts.length,0,'no obsolete disable-and-reload prompt');
     // Use the real content/page transport together, including session acquisition.
     const transportListeners=new Map();
     bridgeContext.document.addEventListener=(type,listener)=>{
